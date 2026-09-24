@@ -218,3 +218,62 @@ def read_invoices(path: str | Path, sheet_name: str | None = None, default_curre
     finally:
         workbook_values.close()
         workbook_formulas.close()
+
+
+def _header_map(sheet, keywords, scan=10):
+    """Find the heading row and map each wanted field to its column index."""
+    for row_number, row in enumerate(sheet.iter_rows(min_row=1, max_row=scan, values_only=True), 1):
+        labels = [str(value or "").strip().casefold() for value in row]
+        mapping = {}
+        for field, words in keywords.items():
+            for index, label in enumerate(labels):
+                if label and any(word in label for word in words) and index not in mapping.values(): mapping[field] = index; break
+        if len(mapping) >= 2: return row_number, mapping
+    raise ValueError("The Excel file has no heading row that Saber recognises")
+
+
+def read_expenses(path):
+    """Expenses from Excel: Date, Description, Category, Currency, Amount (with VAT base), Without VAT, VAT, Reference."""
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = workbook.worksheets[0]
+        header, columns = _header_map(sheet, {"date": ("date", "تاريخ"), "description": ("description", "details", "بيان", "libell"), "category": ("category", "type"),
+            "currency": ("currency", "devise", "عملة"), "without_vat": ("without vat", "no vat", "exempt"), "vat": ("vat", "tva", "tax"),
+            "amount": ("amount", "before vat", "subtotal", "montant", "مبلغ"), "reference": ("reference", "ref", "invoice", "رقم")})
+        if "amount" not in columns and "without_vat" not in columns: raise ValueError("Add an Amount column to the Excel file")
+        rows = []
+        for number, row in enumerate(sheet.iter_rows(min_row=header + 1, values_only=True), header + 1):
+            if not any(value not in (None, "") for value in row): continue
+            get = lambda field: row[columns[field]] if field in columns and columns[field] < len(row) else None
+            def money(field):
+                value = get(field)
+                try: return float(str(value).replace(",", "")) if value not in (None, "") else 0.0
+                except ValueError: raise ValueError(f"Row {number}: {field.replace('_', ' ')} must be a number")
+            amount = money("amount"); without = money("without_vat"); vat = money("vat") if "vat" in columns else round(amount * 0.11, 2)
+            if not amount and not without: continue
+            rows.append({"expense_date": _date(get("date")), "description": str(get("description") or get("reference") or f"Expense row {number}").strip(),
+                         "category": str(get("category") or "General").strip(), "currency": str(get("currency") or "USD").strip().upper()[:3],
+                         "with_vat_subtotal": amount, "without_vat_subtotal": without, "vat": vat, "reference": str(get("reference") or "").strip(), "source_row": number})
+        return rows
+    finally: workbook.close()
+
+
+def read_customs_costs(path):
+    """Landed costs from a customs / broker Excel: totals of Freight, Insurance, Duties, Broker fees, Other, Import VAT."""
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = workbook.worksheets[0]
+        header, columns = _header_map(sheet, {"freight": ("freight", "fret", "shipping"), "insurance": ("insurance", "assurance"),
+            "customs_duties": ("dut", "customs", "douane", "جمرك"), "broker_fees": ("broker", "clearance", "transit", "مخلص"),
+            "import_vat": ("vat", "tva"), "other_costs": ("other", "port", "storage", "handling"), "customs_declaration_no": ("declaration", "bayan", "بيان", "decl")})
+        totals = {key: 0.0 for key in columns if key != "customs_declaration_no"}; declaration = ""
+        for row in sheet.iter_rows(min_row=header + 1, values_only=True):
+            for key, index in columns.items():
+                value = row[index] if index < len(row) else None
+                if value in (None, ""): continue
+                if key == "customs_declaration_no": declaration = declaration or str(value).strip(); continue
+                try: totals[key] += float(str(value).replace(",", ""))
+                except ValueError: pass
+        return {**{k: round(v, 2) for k, v in totals.items()}, "customs_declaration_no": declaration}
+    finally: workbook.close()
+

@@ -200,4 +200,17 @@ class ApiClient:
     def budgets(self,year,currency="USD",department=None,project=None):
         return self.request("GET","/api/budgets?"+urlencode({k:v for k,v in {"year":year,"currency":currency,"department":department,"project":project}.items() if v}))["items"]
     def save_budget(self,item): return self.request("POST","/api/budgets",item)["item"]
+    def next_document_number(self,kind,date=None): return self.request("GET","/api/documents/next-number?"+urlencode({k:v for k,v in {"kind":kind,"date":date}.items() if v}))["number"]
+    def update_payment(self,payment_id,item): return self.request("PUT",f"/api/payments/{payment_id}",item)["id"]
+    def delete_payment(self,payment_id): return self.request("DELETE",f"/api/payments/{payment_id}")
+    def update_expense(self,expense_id,item): return self.request("PUT",f"/api/expenses/{expense_id}",item)["id"]
+    def delete_expense(self,expense_id): return self.request("DELETE",f"/api/expenses/{expense_id}")
+    def expense_attachments(self,expense_id): return self.request("GET",f"/api/expenses/{expense_id}/attachments")["items"]
+    def upload_expense_attachment(self,expense_id,file_name,mime_type,content):
+        return self.request("POST",f"/api/expenses/{expense_id}/attachments",{"file_name":file_name,"mime_type":mime_type,"content":base64.b64encode(content).decode("ascii")})
+    def download_expense_attachment(self,attachment_id):
+        result=self.request("GET",f"/api/expense-attachments/{attachment_id}"); result["content"]=base64.b64decode(result["content"]); return result
+    def replace_invoice(self,invoice_id,invoice,items): return self.request("POST",f"/api/invoices/{invoice_id}/replace",{"invoice":invoice,"items":items})["invoice_id"]
+    def add_landed_cost(self,purchase_id,item): return self.request("POST",f"/api/invoices/{purchase_id}/landed-cost",item)["invoice_id"]
+    def landed_costs(self,purchase_id): return self.request("GET",f"/api/invoices/{purchase_id}/landed-costs")["items"]
 

@@ -355,6 +355,75 @@ class DepartmentsProjectsBudgetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Date From and Date To"): ledger_reports.build_account_report(self.db, {"budget": True})
         with self.assertRaisesRegex(ValueError, "negative"): self.db.save_budget({"year": 2025, "currency": "USD", "lines": [{"account_code": "531", "annual": "-5"}]}, self.user)
 
+class Stage3PaymentsPurchasesExpensesTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
+        self.client_party = self.db.save_party({"kind": "customer", "name": "Client One", "account_category": "client"}, self.user)
+        self.supplier = self.db.save_party({"kind": "supplier", "name": "Alpha Trading", "account_category": "supplier"}, self.user)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def test_receipts_and_payments_numbering_edit_delete(self):
+        receipt = self.db.add_payment({"kind": "customer_receipt", "party_id": self.client_party["id"], "payment_date": "10-03-2025", "currency": "USD", "amount": "100"}, self.user)
+        payment = self.db.add_payment({"kind": "supplier_payment", "party_id": self.supplier["id"], "payment_date": "11-03-2025", "currency": "USD", "amount": "40", "payment_method": "Cheque"}, self.user)
+        rows = {r["id"]: r for r in self.db.list_payments()}
+        self.assertEqual((rows[receipt]["payment_number"], rows[payment]["payment_number"]), ("RV-2025-000001", "PV-2025-000001"))
+        self.assertEqual(rows[receipt]["party_account"], self.client_party["account_number"])  # the customer's own account
+        self.assertEqual(self.db.next_document_number("customer_receipt", "01-04-2025"), "RV-2025-000002")
+        new_id = self.db.update_payment(receipt, {"party_id": self.client_party["id"], "payment_date": "10-03-2025", "currency": "USD", "amount": "150"}, self.user)
+        edited = next(r for r in self.db.list_payments() if r["id"] == new_id)
+        self.assertEqual((edited["payment_number"], edited["amount"]), ("RV-2025-000001", 150))
+        self.assertEqual(len([e for e in self.db.journal() if e["entry_number"] == "RV-2025-000001"]), 2)
+        self.db.delete_payment(payment, self.user)
+        self.assertFalse([e for e in self.db.journal() if e["entry_number"] == "PV-2025-000001"])
+
+    def test_expense_edit_delete_keeps_attachments(self):
+        expense = self.db.add_expense({"expense_date": "05-03-2025", "description": "Rent", "currency": "USD", "with_vat_subtotal": "500", "vat": "55"}, self.user)
+        self.db.add_expense_attachment(expense, "rent.pdf", "application/pdf", b"%PDF-1", self.user)
+        new_id = self.db.update_expense(expense, {"expense_date": "05-03-2025", "description": "Rent March", "currency": "USD", "with_vat_subtotal": "600", "vat": "66"}, self.user)
+        row = next(r for r in self.db.list_expenses() if r["id"] == new_id)
+        self.assertEqual((row["expense_number"], row["total"], row["attachment_count"]), ("EXP-2025-000001", 666, 1))
+        self.db.delete_expense(new_id, self.user)
+        self.assertEqual(self.db.list_expenses(), []); self.assertAlmostEqual(sum(r["debit"] - r["credit"] for r in self.db.journal()), 0, places=2)
+
+    def test_purchase_edit_keeps_pdf_and_landed_cost_reaches_vat(self):
+        purchase = self.db.create_manual_invoice({"invoice_date": "15-03-2025", "party_name": "Alpha Trading", "kind": "purchases", "currency": "USD", "status": "posted", "invoice_number": "INV-457"},
+                                                 [{"description": "Goods", "quantity": 1, "unit_price": 1000, "vat_rate": 11}], self.user)
+        self.db.add_attachment(purchase, "inv.pdf", "application/pdf", b"%PDF-1", self.user)
+        landed = self.db.add_landed_cost(purchase, {"freight": "120", "customs_duties": "200", "import_vat": "42.35", "customs_declaration_no": "D-778"}, self.user)
+        new_id = self.db.replace_manual_invoice(purchase, {"invoice_date": "15-03-2025", "party_name": "Alpha Trading", "kind": "purchases", "currency": "USD", "status": "posted"},
+                                                [{"description": "Goods", "quantity": 1, "unit_price": 1200, "vat_rate": 11}], self.user)
+        rows = {r["id"]: r for r in self.db.list_invoices()}
+        self.assertEqual((rows[new_id]["invoice_number"], rows[new_id]["attachment_count"], float(rows[new_id]["total"])), ("INV-457", 1, 1332))
+        self.assertNotIn(purchase, rows)
+        self.assertEqual([c["id"] for c in self.db.landed_costs(new_id)], [landed])
+        result = vat_return.build_vat_return(self.db, 2025, 1)
+        self.assertEqual(float(result["per_currency"]["USD"]["customs"]["vat"]), 42.35); self.assertEqual(float(result["per_currency"]["USD"]["purchases"]["vat"]), 132)
+        with self.assertRaisesRegex(ValueError, "at least one"): self.db.add_landed_cost(new_id, {}, self.user)
+
+    def test_pdf_and_excel_readers(self):
+        from reportlab.pdfgen import canvas
+        from openpyxl import Workbook
+        from pdf_import import read_invoice_pdf
+        from importer import read_expenses, read_customs_costs
+        pdf = Path(self.folder.name) / "invoice.pdf"; c = canvas.Canvas(str(pdf)); y = 800
+        for line in ["ALPHA TRADING SARL", "Invoice No: INV-2024-0457", "Date: 15/03/2024", "Subtotal: 1,000.00 USD", "VAT 11%: 110.00", "Grand Total: 1,110.00 USD"]:
+            c.drawString(60, y, line); y -= 20
+        c.save()
+        data = read_invoice_pdf(pdf)
+        self.assertEqual((data["invoice_number"], data["invoice_date"], data["currency"], data["subtotal"], data["vat"], data["total"]), ("INV-2024-0457", "15-03-2024", "USD", 1000, 110, 1110))
+        self.assertEqual(data["party_name"], "ALPHA TRADING SARL")
+        blank = Path(self.folder.name) / "scan.pdf"; c = canvas.Canvas(str(blank)); c.rect(10, 10, 100, 100); c.save()
+        self.assertIn("scanned", read_invoice_pdf(blank)["notes"])
+        wb = Workbook(); ws = wb.active; ws.append(["Date", "Description", "Currency", "Amount", "Without VAT", "VAT", "Reference"]); ws.append(["05-03-2025", "Rent", "USD", 500, 0, 55, "R-3"]); ws.append([None] * 7)
+        wb.save(Path(self.folder.name) / "exp.xlsx")
+        expenses = read_expenses(Path(self.folder.name) / "exp.xlsx")
+        self.assertEqual(len(expenses), 1); self.assertEqual((expenses[0]["with_vat_subtotal"], expenses[0]["vat"], expenses[0]["reference"]), (500, 55, "R-3"))
+        wb = Workbook(); ws = wb.active; ws.append(["Declaration No", "Freight", "Insurance", "Customs Duties", "Broker Fees", "VAT"]); ws.append(["D-1", 100, 10, 200, 50, 40]); ws.append(["", 20, 0, 0, 0, 2])
+        wb.save(Path(self.folder.name) / "customs.xlsx")
+        costs = read_customs_costs(Path(self.folder.name) / "customs.xlsx")
+        self.assertEqual((costs["freight"], costs["customs_duties"], costs["import_vat"], costs["customs_declaration_no"]), (120, 200, 42, "D-1"))
+
 class StandaloneEndToEndTest(unittest.TestCase):
     """Runs the embedded data service exactly as the installed app does and drives it through the API."""
 

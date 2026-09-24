@@ -17,6 +17,7 @@ from report_export import export_excel, export_invoice_pdf, export_pdf, print_ro
 from desktop_final import FinalFeaturesMixin
 from desktop_brains import BrainsScreensMixin
 from desktop_dimensions import DimensionsMixin
+from desktop_stage3 import Stage3Mixin
 
 NAVY, GOLD, LIGHT = "#071b2e", "#c9a96a", "#f3f6f8"
 
@@ -70,7 +71,7 @@ def natural_sort_value(value):
     try: return (0,float(text.replace(",","")))
     except ValueError: return (1,text.casefold())
 
-class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
+class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Saber Accounting")
@@ -250,7 +251,7 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         filter_bar=tk.Frame(self,bg=LIGHT); filter_bar.pack(fill="x",padx=28)
         notebook.pack(fill="both",expand=True,padx=18,pady=(6,16))
         pages=[("dashboard_tab",tr(lang,"dashboard")),("invoices_tab",tr(lang,"invoices")),("sales_tab","Sales Invoice"),("manual_tab",tr(lang,"manual_entry")),
-            ("import_tab",tr(lang,"import")),("parties_tab",tr(lang,"customers_suppliers")),("transactions_tab",tr(lang,"payments_expenses"))]
+            ("import_tab",tr(lang,"import")),("parties_tab",tr(lang,"customers_suppliers")),("transactions_tab",tr(lang,"payments_expenses")),("purchases_tab","Purchases & Expenses")]
         if self.can_use("payroll"): pages.append(("payroll_tab","Payroll"))
         if self.can_use("vat"): pages.append(("vat_tab","Quarterly VAT"))
         pages+=[("journal_tab",tr(lang,"general_journal")),("trial_tab",tr(lang,"trial_balance")),("pnl_tab",tr(lang,"profit_loss")),("reports_tab",tr(lang,"financial_reports")),
@@ -265,14 +266,14 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
             row,column=divmod(index,per_row)
             tab_nav.grid_columnconfigure(column,weight=1,uniform="main_tabs")
             button=tk.Button(tab_nav,text=name,command=lambda p=page:self.select_main_tab(p),bg=NAVY,fg="white",
-                activebackground=GOLD,activeforeground=NAVY,border=1,font=("Segoe UI",8,"bold"),pady=5,wraplength=145)
+                activebackground=GOLD,activeforeground=NAVY,border=1,font=("Segoe UI",8,"bold"),pady=3,wraplength=112)
             button.grid(row=row,column=column,sticky="nsew",padx=2,pady=2); self.tab_buttons.append(button)
         notebook.bind("<<NotebookTabChanged>>",lambda _event:self.highlight_main_tab())
         self.highlight_main_tab()
         tk.Label(filter_bar,text="Show currency:",bg=LIGHT,font=("Segoe UI",10,"bold")).pack(side="left")
         currency_filter=ttk.Combobox(filter_bar,textvariable=self.view_currency,values=["All Currencies","USD","EUR","LBP","AED"],state="readonly",width=16)
         currency_filter.pack(side="left",padx=8); currency_filter.bind("<<ComboboxSelected>>",lambda _event:self.currency_changed())
-        builders=[self.build_dashboard,self.build_invoices,self.build_sales_invoice,self.build_manual,self.build_import,self.build_parties,self.build_transactions]
+        builders=[self.build_dashboard,self.build_invoices,self.build_sales_invoice,self.build_manual,self.build_import,self.build_parties,self.build_transactions,self.build_purchases_expenses]
         if self.can_use("payroll"): builders.append(self.build_payroll)
         if self.can_use("vat"): builders.append(self.build_vat_return)
         builders+=[self.build_journal,self.build_trial,self.build_profit_loss,self.build_financial_reports,self.build_statement,self.build_accounts,self.build_settings]
@@ -1081,47 +1082,6 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         self.new_sales_invoice(confirm=False)
         self.load_dashboard(); self.load_invoices(); self.load_journal(); self.load_trial()
 
-    def build_import(self):
-        l=self.language.get(); controls=tk.Frame(self.import_tab,bg=LIGHT); controls.pack(fill="x",padx=10,pady=10)
-        self.file_label=tk.Label(controls,text="No file selected",bg=LIGHT,anchor="w"); self.file_label.pack(side="left",fill="x",expand=True)
-        self.currency=tk.StringVar(value="USD")
-        ttk.Combobox(controls,textvariable=self.currency,values=["USD","LBP","EUR","AED"],state="readonly",width=8).pack(side="right",padx=6)
-        import_filter=ttk.Combobox(controls,textvariable=self.import_view_currency,values=["All Currencies","USD","EUR","LBP","AED"],state="readonly",width=15)
-        import_filter.pack(side="right",padx=(4,2))
-        tk.Button(controls,text="Apply",command=self.populate_import_preview,bg=GOLD,fg=NAVY,font=("Segoe UI",9,"bold"),border=0,padx=12,pady=5).pack(side="right",padx=4)
-        tk.Label(controls,text="Show:",bg=LIGHT).pack(side="right")
-        self.kind=tk.StringVar(value="purchase"); ttk.Combobox(controls,textvariable=self.kind,values=["purchase","sale"],state="readonly",width=10).pack(side="right",padx=6)
-        tk.Button(controls,text=tr(l,"choose_file"),command=self.choose_import,bg=NAVY,fg="white",border=0,padx=16,pady=7).pack(side="right")
-        self.import_tree=self.table(self.import_tab,[("no",tr(l,"invoice_no"),90),("row",tr(l,"source_row"),65),("date",tr(l,"date"),95),("party",tr(l,"party"),190),("currency",tr(l,"currency"),70),("subtotal",tr(l,"before_vat"),95),("vat",tr(l,"vat"),80),("total",tr(l,"total"),95),("debit","Debit",95),("credit","Credit",95),("supplier_account","Supplier A/C",90),("vat_account","VAT A/C",80),("expense_account","Expense A/C",90)])
-        self.import_status=tk.Label(self.import_tab,text="",bg=LIGHT); self.import_status.pack()
-        tk.Button(self.import_tab,text=tr(l,"send"),command=self.send_import,bg=GOLD,fg=NAVY,font=("Segoe UI",10,"bold"),border=0,padx=22,pady=8).pack(pady=10)
-
-    def choose_import(self):
-        path=filedialog.askopenfilename(filetypes=[("Excel files","*.xlsx")])
-        if not path: return
-        try: self.import_rows=read_invoices(path,default_currency=self.currency.get(),default_kind=self.kind.get())
-        except Exception as exc: return messagebox.showerror("Import",str(exc))
-        self.file_label.config(text=path); self.populate_import_preview()
-
-    def populate_import_preview(self):
-        self.import_tree.delete(*self.import_tree.get_children())
-        selected=self.import_view_currency.get()
-        rows=[r for r in self.import_rows if selected=="All Currencies" or r["currency"]==selected]
-        for r in rows[:1000]:
-            debit=r["total"] if r["kind"]=="sale" else 0
-            credit=r["total"] if r["kind"]=="purchase" else 0
-            self.import_tree.insert("","end",values=(r["invoice_number"],r["source_row"],r["invoice_date"],r["party_name"],r["currency"],r["subtotal"],r["vat"],r["total"],debit,credit,r["supplier_account"],r["vat_account"],r["expense_account"]))
-        self.import_status.config(text=f'{len(rows)} {tr(self.language.get(),"rows_ready")} ({selected})')
-
-    def send_import(self):
-        if not self.import_rows: return messagebox.showwarning("Import","Choose a file first")
-        if not messagebox.askyesno("Replace previous data","This import will remove all previous invoices and replace them with the selected Excel file. A safety backup will be created. Continue?"):
-            return
-        try: result=self.client.import_invoices(self.import_rows,replace_existing=True)
-        except Exception as exc: return messagebox.showerror("Import",str(exc))
-        messagebox.showinfo("Import",f'Previous invoices removed: {result["deleted"]}\n{result["imported"]} {tr(self.language.get(),"imported")}\nErrors: {len(result["errors"])}')
-        self.load_dashboard(); self.load_invoices(); self.load_journal(); self.load_trial()
-
     def build_parties(self):
         form=tk.LabelFrame(self.parties_tab,text="Customer / Supplier File",bg=LIGHT,padx=10,pady=8); form.pack(fill="x",padx=10,pady=10)
         self.edit_party_id=None; self.party_name=tk.StringVar(); self.party_kind=tk.StringVar(value="client"); self.party_account_number=tk.StringVar(); self.party_tax=tk.StringVar(); self.party_mof=tk.StringVar(); self.party_address=tk.StringVar(); self.party_contact=tk.StringVar(); self.party_currency=tk.StringVar(value="USD")
@@ -1219,177 +1179,6 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         buttons=tk.Frame(window,bg=LIGHT); buttons.pack(pady=8)
         self.action_button(buttons,"Upload Legal Document",upload).pack(side="left",padx=4); self.action_button(buttons,"Download Selected",download).pack(side="left",padx=4)
         refresh()
-
-    def build_transactions(self):
-        buttons=tk.Frame(self.transactions_tab,bg=LIGHT); buttons.pack(fill="x",padx=10,pady=10)
-        self.action_button(buttons,"Add Customer Receipt",lambda:self.payment_dialog("customer_receipt")).pack(side="left",padx=4)
-        self.action_button(buttons,"Add Supplier Payment",lambda:self.payment_dialog("supplier_payment")).pack(side="left",padx=4)
-        tk.Button(buttons,text="Add Expense",command=self.expense_dialog,bg=GOLD,fg=NAVY,border=0,padx=16,pady=7).pack(side="left",padx=4)
-        self.action_button(buttons,"Refresh",self.load_transactions).pack(side="left",padx=4)
-        nested=ttk.Notebook(self.transactions_tab); nested.pack(fill="both",expand=True,padx=10,pady=(0,10))
-        payment_frame=tk.Frame(nested,bg=LIGHT); expense_frame=tk.Frame(nested,bg=LIGHT); documents_frame=tk.Frame(nested,bg=LIGHT)
-        nested.add(payment_frame,text="Receipts & Payments"); nested.add(expense_frame,text="Expenses"); nested.add(documents_frame,text="Purchases / Expenses / Customs")
-        self.payments_tree=self.table(payment_frame,[("date","Date",100),("kind","Type",130),("party","Customer / Supplier",220),("currency","Currency",80),("amount","Amount",120),("cash","Cash / Bank A/C",110),("reference","Reference",130),("description","Description",220)])
-        self.expenses_tree=self.table(expense_frame,[("date","Date",95),("description","Description",190),("category","Category",110),("currency","Currency",70),("with_vat","Expense with VAT",120),("without_vat","Expense without VAT",130),("vat","VAT",80),("total","Total",100),("account","With VAT A/C",100),("no_vat_account","Without VAT A/C",110),("payment","Payment A/C",95)])
-        case_actions=tk.Frame(documents_frame,bg=LIGHT); case_actions.pack(fill="x",padx=8,pady=8)
-        self.action_button(case_actions,"New Purchase Case",lambda:self.document_case_dialog("purchase")).pack(side="left",padx=3)
-        self.action_button(case_actions,"New Expense Case",lambda:self.document_case_dialog("expense")).pack(side="left",padx=3)
-        self.action_button(case_actions,"New Customs Case",lambda:self.document_case_dialog("customs")).pack(side="left",padx=3)
-        self.action_button(case_actions,"Attach Document",self.attach_selected_case_document).pack(side="left",padx=3)
-        tk.Button(case_actions,text="Post to Accounting",command=self.post_selected_document_case,bg=GOLD,fg=NAVY,border=0,padx=14,pady=7).pack(side="left",padx=3)
-        self.action_button(case_actions,"Documents / Download",self.show_case_documents).pack(side="left",padx=3)
-        self.document_cases_tree=self.table(documents_frame,[("number","Case Number",135),("type","Case Type",90),("date","Date",95),("party","Supplier",180),("currency","Currency",70),("reference","Invoice / Reference",125),("customs","Customs Declaration",135),("base","Supplier Invoice",110),("vat","VAT",90),("total","Landed / Total",115),("attachments","Docs",55),("status","Status",80)])
-        self.load_transactions()
-
-    def payment_dialog(self,kind):
-        try: parties=self.client.parties()
-        except Exception as exc: return messagebox.showerror("Payments",str(exc))
-        wanted="customer" if kind=="customer_receipt" else "supplier"
-        parties=[p for p in parties if p["kind"] in (wanted,"both")]
-        if not parties: return messagebox.showwarning("Payments",f"Add a {wanted} first")
-        window=tk.Toplevel(self); window.title("Customer Receipt" if kind=="customer_receipt" else "Supplier Payment"); window.configure(bg=LIGHT); window.transient(self); window.grab_set()
-        mapping={f'{p["name"]} ({p["currency"]})':p for p in parties}; party=tk.StringVar(value=next(iter(mapping)))
-        values={"payment_date":tk.StringVar(value=datetime.now().strftime("%d-%m-%Y")),"currency":tk.StringVar(value="USD"),"amount":tk.StringVar(value="0"),"cash_account":tk.StringVar(value="531"),"party_account":tk.StringVar(value="4111" if kind=="customer_receipt" else "4011"),"reference":tk.StringVar(),"description":tk.StringVar()}
-        fields=[("Customer / Supplier",party),("Date",values["payment_date"]),("Currency",values["currency"]),("Amount",values["amount"]),("Cash / Bank Account",values["cash_account"]),("Party Account",values["party_account"]),("Reference",values["reference"]),("Description",values["description"])]
-        for index,(label,var) in enumerate(fields):
-            tk.Label(window,text=label,bg=LIGHT).grid(row=index,column=0,sticky="w",padx=14,pady=6)
-            widget=ttk.Combobox(window,textvariable=var,values=list(mapping),state="readonly",width=31) if index==0 else ttk.Combobox(window,textvariable=var,values=["USD","EUR","LBP","AED"],state="readonly",width=31) if label=="Currency" else self.account_search_box(window,var,31) if label in ("Cash / Bank Account","Party Account") else self.date_entry(window,var,34) if label=="Date" else tk.Entry(window,textvariable=var,width=34)
-            widget.grid(row=index,column=1,padx=14,pady=6)
-        def save():
-            item={key:var.get().strip() for key,var in values.items()}; item.update({"kind":kind,"party_id":mapping[party.get()]["id"]})
-            try: self.client.add_payment(item)
-            except Exception as exc: return messagebox.showerror("Payments",str(exc),parent=window)
-            window.destroy(); self.load_transactions(); self.load_journal(); self.load_trial(); self.load_financial_reports(); messagebox.showinfo("Payments","Saved successfully")
-        self.action_button(window,"Save",save).grid(row=len(fields),column=0,columnspan=2,pady=14)
-
-    def expense_dialog(self):
-        window=tk.Toplevel(self); window.title("Add Expense"); window.configure(bg=LIGHT); window.transient(self); window.grab_set()
-        defaults={"expense_date":datetime.now().strftime("%d-%m-%Y"),"description":"","category":"General","currency":"USD","with_vat_subtotal":"0","without_vat_subtotal":"0","vat":"0","expense_account":"601100000","expense_without_vat_account":"601100001","vat_account":"442660000","payment_account":"531","expense_side":"D - Debit","expense_without_vat_side":"D - Debit","vat_side":"D - Debit","payment_side":"C - Credit","reference":""}
-        values={key:tk.StringVar(value=value) for key,value in defaults.items()}
-        labels=[("Date","expense_date"),("Description","description"),("Category","category"),("Currency","currency"),("Expense with VAT","with_vat_subtotal"),("Expense without VAT","without_vat_subtotal"),("VAT","vat"),("With VAT Account","expense_account"),("Without VAT Account","expense_without_vat_account"),("VAT Account","vat_account"),("Cash / Bank Account","payment_account"),("Reference","reference")]
-        for index,(label,key) in enumerate(labels):
-            tk.Label(window,text=label,bg=LIGHT).grid(row=index,column=0,sticky="w",padx=14,pady=5)
-            if key=="currency": widget=ttk.Combobox(window,textvariable=values[key],values=["USD","EUR","LBP","AED"],state="readonly",width=31)
-            elif key in ("expense_account","expense_without_vat_account","vat_account","payment_account"):
-                frame=tk.Frame(window,bg=LIGHT); self.account_search_box(frame,values[key],20).pack(side="left")
-                side_key={"expense_account":"expense_side","expense_without_vat_account":"expense_without_vat_side","vat_account":"vat_side","payment_account":"payment_side"}[key]
-                ttk.Combobox(frame,textvariable=values[side_key],values=["D - Debit","C - Credit"],state="readonly",width=10).pack(side="left",padx=(5,0)); widget=frame
-            elif key=="expense_date": widget=self.date_entry(window,values[key],34)
-            else: widget=tk.Entry(window,textvariable=values[key],width=34)
-            widget.grid(row=index,column=1,padx=14,pady=5)
-        try: expense_rates=self.client.exchange_rates()
-        except Exception: expense_rates=[]
-        exchange_text=tk.Label(window,text="Exchange equivalent: 0.00",bg=LIGHT,fg=NAVY,font=("Segoe UI",9,"bold"))
-        exchange_text.grid(row=len(labels),column=0,columnspan=2,pady=(8,2))
-        def update_exchange(*_args):
-            try: amount=float(values["with_vat_subtotal"].get() or 0)+float(values["without_vat_subtotal"].get() or 0)+float(values["vat"].get() or 0)
-            except ValueError: amount=0
-            lbp,usd=self.exchange_equivalents(amount,values["currency"].get(),expense_rates)
-            currency=values["currency"].get()
-            if currency=="LBP": text="USD rate not entered" if usd is None else f"USD {usd:,.2f}"
-            elif currency=="USD": text="LBP rate not entered" if lbp is None else f"LBP {lbp:,.2f}"
-            else: text=f'{"LBP rate not entered" if lbp is None else f"LBP {lbp:,.2f}"}   |   {"USD rate not entered" if usd is None else f"USD {usd:,.2f}"}'
-            exchange_text.config(text="Exchange equivalent: "+text)
-        for key in ("with_vat_subtotal","without_vat_subtotal","vat","currency"): values[key].trace_add("write",update_exchange)
-        non_deductible=tk.BooleanVar(value=False); expense_department=tk.StringVar(); expense_project=tk.StringVar()
-        dims=tk.Frame(window,bg=LIGHT); dims.grid(row=len(labels)+3,column=0,columnspan=2,pady=(0,4)); self.dimension_selectors(dims,expense_department,expense_project)
-        tk.Checkbutton(window,text="VAT is NOT deductible (add it to the expense cost)",variable=non_deductible,bg=LIGHT).grid(row=len(labels)+2,column=0,columnspan=2,pady=(0,4))
-        def save():
-            try: self.client.add_expense({**{key:var.get().strip() for key,var in values.items()},"vat_recoverable":not non_deductible.get(),"department":self.dimension_code(expense_department.get()),"project":self.dimension_code(expense_project.get())})
-            except Exception as exc: return messagebox.showerror("Expenses",str(exc),parent=window)
-            window.destroy(); self.load_transactions(); self.load_journal(); self.load_trial(); self.load_profit_loss(); self.load_financial_reports(); messagebox.showinfo("Expenses","Saved successfully")
-        self.action_button(window,"Save Expense",save).grid(row=len(labels)+1,column=0,columnspan=2,pady=14)
-
-    def load_transactions(self):
-        try: payments=self.client.payments(); expenses=self.client.expenses(); cases=self.client.document_cases()
-        except Exception as exc: return messagebox.showerror("Payments / Expenses",str(exc))
-        self.payments_tree.delete(*self.payments_tree.get_children()); self.expenses_tree.delete(*self.expenses_tree.get_children())
-        for row in payments: self.payments_tree.insert("","end",values=(row["payment_date"],row["kind"],row["party_name"],row["currency"],f'{row["amount"]:,.2f}',row["cash_account"],row["reference"],row["description"]))
-        for row in expenses: self.expenses_tree.insert("","end",values=(row["expense_date"],row["description"],row["category"],row["currency"],f'{row.get("with_vat_subtotal",row["subtotal"]):,.2f}',f'{row.get("without_vat_subtotal",0):,.2f}',f'{row["vat"]:,.2f}',f'{row["total"]:,.2f}',row["expense_account"],row.get("expense_without_vat_account","601100001"),row["payment_account"]))
-        self.document_case_rows={str(row["id"]):row for row in cases}; self.document_cases_tree.delete(*self.document_cases_tree.get_children())
-        for row in cases:
-            self.document_cases_tree.insert("","end",iid=str(row["id"]),values=(row["case_number"],row["case_type"].title(),row["document_date"],row["party_name"],row["currency"],row.get("reference") or "",row.get("customs_declaration_no") or "",f'{float(row["supplier_invoice_amount"]):,.2f}',f'{float(row["import_vat"]):,.2f}',f'{float(row["total"]):,.2f}',row["attachment_count"],row["status"].title()))
-
-    def document_case_dialog(self,case_type):
-        try: parties=[row for row in self.client.parties() if row["kind"] in ("supplier","both")]
-        except Exception as exc: return messagebox.showerror("Document Case",str(exc))
-        if not parties: return messagebox.showwarning("Document Case","Create a supplier first")
-        window=tk.Toplevel(self); window.title(f"New {case_type.title()} Case"); window.configure(bg=LIGHT); window.transient(self); window.grab_set()
-        party_map={f'{row.get("account_number") or ""} - {row["name"]}':row for row in parties}; selected_party=tk.StringVar(value=next(iter(party_map)))
-        defaults={"document_date":datetime.now().strftime("%d-%m-%Y"),"currency":"USD","reference":"","description":"","customs_declaration_no":"","broker_name":"",
-            "supplier_invoice_amount":"0","freight":"0","insurance":"0","customs_duties":"0","import_vat":"0","broker_fees":"0","supplier_account":"","expense_account":"601100000","vat_account":"442660000","branch":"Head Office"}
-        values={key:tk.StringVar(value=value) for key,value in defaults.items()}
-        fields=[("Supplier",selected_party),("Date",values["document_date"]),("Currency",values["currency"]),("Invoice / Reference",values["reference"]),("Description",values["description"]),
-            ("Supplier Invoice Amount",values["supplier_invoice_amount"]),("Import / Purchase VAT",values["import_vat"])]
-        if case_type=="customs": fields.extend([("Customs Declaration No.",values["customs_declaration_no"]),("Customs Broker",values["broker_name"]),("Freight",values["freight"]),("Insurance",values["insurance"]),("Customs Duties",values["customs_duties"]),("Broker Fees",values["broker_fees"])])
-        fields.extend([("Supplier Account",values["supplier_account"]),("Expense / Landed Cost Account",values["expense_account"]),("VAT Account",values["vat_account"]),("Branch",values["branch"])])
-        for index,(label,var) in enumerate(fields):
-            row=index//2; column=(index%2)*2; tk.Label(window,text=label,bg=LIGHT).grid(row=row,column=column,sticky="w",padx=(12,4),pady=6)
-            if label=="Supplier": widget=ttk.Combobox(window,textvariable=var,values=list(party_map),state="readonly",width=31)
-            elif label=="Currency": widget=ttk.Combobox(window,textvariable=var,values=["USD","EUR","LBP","AED"],state="readonly",width=31)
-            elif label=="Branch": widget=self.branch_selector(window,var,31,False)
-            elif "Account" in label: widget=self.account_search_box(window,var,31)
-            elif label=="Date": widget=self.date_entry(window,var,34)
-            else: widget=tk.Entry(window,textvariable=var,width=34)
-            widget.grid(row=row,column=column+1,padx=(4,12),pady=6)
-        def save():
-            payload={key:var.get().split(" - ",1)[0].strip() if key.endswith("account") else var.get().strip() for key,var in values.items()}
-            try: payload["document_date"]=formatted_user_date(payload["document_date"])
-            except ValueError: return messagebox.showwarning("Document Case","Enter 8 date digits: DDMMYYYY",parent=window)
-            payload.update({"case_type":case_type,"party_id":party_map[selected_party.get()]["id"]})
-            try: created=self.client.save_document_case(payload)
-            except Exception as exc: return messagebox.showerror("Document Case",str(exc),parent=window)
-            window.destroy(); self.load_transactions(); messagebox.showinfo("Document Case",f'Draft {created["case_number"]} saved. Attach the required documents, then click Post to Accounting.')
-        self.action_button(window,"Save Draft Case",save).grid(row=(len(fields)+1)//2,column=0,columnspan=4,pady=14)
-
-    def selected_document_case(self):
-        selected=self.document_cases_tree.selection()
-        if not selected: messagebox.showwarning("Document Case","Select a case first"); return None
-        return self.document_case_rows.get(selected[0])
-
-    def attach_selected_case_document(self):
-        case=self.selected_document_case()
-        if not case: return
-        roles={"purchase":["supplier_invoice","other"],"expense":["expense_document","other"],"customs":["supplier_invoice","customs_declaration","broker_invoice","freight_document","other"]}[case["case_type"]]
-        window=tk.Toplevel(self); window.title(f'Attach to {case["case_number"]}'); window.configure(bg=LIGHT); window.transient(self); window.grab_set()
-        role=tk.StringVar(value=roles[0]); path_var=tk.StringVar()
-        tk.Label(window,text="Document Type",bg=LIGHT).grid(row=0,column=0,padx=12,pady=8); ttk.Combobox(window,textvariable=role,values=roles,state="readonly",width=28).grid(row=0,column=1,padx=12,pady=8)
-        tk.Label(window,text="File",bg=LIGHT).grid(row=1,column=0,padx=12,pady=8); tk.Entry(window,textvariable=path_var,width=42,state="readonly").grid(row=1,column=1,padx=12,pady=8)
-        def choose():
-            path=filedialog.askopenfilename(filetypes=[("Documents","*.pdf *.png *.jpg *.jpeg"),("All files","*.*")]); path_var.set(path)
-        self.action_button(window,"Choose File",choose).grid(row=1,column=2,padx=8)
-        def upload():
-            path=path_var.get()
-            if not path: return messagebox.showwarning("Document Case","Choose a file",parent=window)
-            try: self.client.upload_case_attachment(case["id"],role.get(),Path(path).name,mimetypes.guess_type(path)[0] or "application/octet-stream",Path(path).read_bytes())
-            except Exception as exc: return messagebox.showerror("Document Case",str(exc),parent=window)
-            window.destroy(); self.load_transactions(); messagebox.showinfo("Document Case","Document attached successfully")
-        self.action_button(window,"Upload",upload).grid(row=2,column=0,columnspan=3,pady=12)
-
-    def post_selected_document_case(self):
-        case=self.selected_document_case()
-        if not case: return
-        if not messagebox.askyesno("Post Document Case",f'Post {case["case_number"]} to accounting? After posting it will create the automatic journal entry.'): return
-        try: posted=self.client.post_document_case(case["id"])
-        except Exception as exc: return messagebox.showerror("Document Case",str(exc))
-        self.load_transactions(); self.load_invoices(); self.load_journal(); self.load_trial(); messagebox.showinfo("Document Case",f'{posted["case_number"]} posted successfully')
-
-    def show_case_documents(self):
-        case=self.selected_document_case()
-        if not case: return
-        try: documents=self.client.case_attachments(case["id"])
-        except Exception as exc: return messagebox.showerror("Document Case",str(exc))
-        if not documents: return messagebox.showinfo("Document Case","No documents attached")
-        window=tk.Toplevel(self); window.title(f'Documents - {case["case_number"]}'); window.configure(bg=LIGHT); window.geometry("700x360")
-        tree=self.table(window,[("role","Document Type",170),("name","File Name",300),("size","Size",90),("date","Uploaded",160)])
-        records={str(row["id"]):row for row in documents}
-        for row in documents: tree.insert("","end",iid=str(row["id"]),values=(row["document_role"],row["file_name"],row["size"],row["uploaded_at"]))
-        def download():
-            selected=tree.selection()
-            if not selected: return
-            record=records[selected[0]]; path=filedialog.asksaveasfilename(initialfile=record["file_name"])
-            if path: Path(path).write_bytes(self.client.download_case_attachment(record["id"])["content"])
-        self.action_button(window,"Download Selected",download).pack(pady=8)
 
     def build_payroll(self):
         nested=ttk.Notebook(self.payroll_tab); nested.pack(fill="both",expand=True,padx=8,pady=8)

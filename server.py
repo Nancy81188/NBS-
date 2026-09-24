@@ -95,6 +95,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                 options["department_id"]=department_id; options["project_id"]=project_id
                 return self._json(200,ledger_reports.json_ready(ledger_reports.build_account_report(self.db,options)))
             except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path == "/api/documents/next-number":
+            try: return self._json(200,{"number":self.db.next_document_number(self._query(parsed,"kind"),self._query(parsed,"date"))})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/expenses/") and path.endswith("/attachments"):
+            try: return self._json(200,{"items":self.db.list_expense_attachments(int(path.split("/")[-2]))})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/expense-attachments/"):
+            try:
+                attachment=self.db.get_expense_attachment(int(path.rsplit("/",1)[-1])); attachment["content"]=base64.b64encode(attachment["content"]).decode("ascii")
+            except KeyError: return self._json(404,{"error":"Attachment not found"})
+            return self._json(200,attachment)
+        if path.startswith("/api/invoices/") and path.endswith("/landed-costs"):
+            try: return self._json(200,{"items":self.db.landed_costs(int(path.split("/")[-2]))})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/departments": return self._json(200,{"items":self.db.list_departments()})
         if path == "/api/projects": return self._json(200,{"items":self.db.list_projects()})
         if path == "/api/budgets":
@@ -297,6 +311,19 @@ class ApiHandler(BaseHTTPRequestHandler):
         if user["role"] == "viewer":
             return self._json(403,{"error":"Viewer access is read-only"})
         if self._module_denied(user, path): return
+        if path.startswith("/api/expenses/") and path.endswith("/attachments"):
+            try:
+                raw=base64.b64decode(body.get("content","").encode("ascii"),validate=True)
+                return self._json(201,{"attachment_id":self.db.add_expense_attachment(int(path.split("/")[-2]),body.get("file_name"),body.get("mime_type"),raw,user["id"])})
+            except KeyError: return self._json(404,{"error":"Expense not found"})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/invoices/") and path.endswith("/replace"):
+            try: return self._json(200,{"invoice_id":self.db.replace_manual_invoice(int(path.split("/")[-2]),body.get("invoice",{}),body.get("items",[]),user["id"])})
+            except KeyError: return self._json(404,{"error":"Invoice not found"})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/invoices/") and path.endswith("/landed-cost"):
+            try: return self._json(201,{"invoice_id":self.db.add_landed_cost(int(path.split("/")[-2]),body,user["id"])})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path in ("/api/departments","/api/projects","/api/budgets"):
             try:
                 saver={"/api/departments":self.db.save_department,"/api/projects":self.db.save_project,"/api/budgets":self.db.save_budget}[path]
@@ -506,6 +533,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._json(423,{"error":"This fiscal year is closed and read-only"})
         if user["role"] == "viewer":
             return self._json(403,{"error":"Viewer access is read-only"})
+        if path.startswith("/api/payments/") or path.startswith("/api/expenses/"):
+            try:
+                body=self._body(); record_id=int(path.rsplit("/",1)[-1])
+                result=self.db.update_payment(record_id,body,user["id"]) if path.startswith("/api/payments/") else self.db.update_expense(record_id,body,user["id"])
+            except KeyError as exc: return self._json(404,{"error":str(exc).strip("'")})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+            return self._json(200,{"id":result})
         if path.startswith("/api/journal-vouchers/"):
             try:
                 body=self._body(); result=self.db.save_journal_voucher(body.get("voucher",{}),body.get("lines",[]),user["id"],int(path.rsplit("/",1)[-1]))
@@ -546,6 +580,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             if self._module_denied(user, path): return
             if path.startswith("/api/vat-return/adjustments/"): result=vat_return.delete_adjustment(self.db,int(path.rsplit("/",1)[-1]),user["id"])
+            elif path.startswith("/api/payments/"): result=self.db.delete_payment(int(path.rsplit("/",1)[-1]),user["id"])
+            elif path.startswith("/api/expenses/"): result=self.db.delete_expense(int(path.rsplit("/",1)[-1]),user["id"])
             elif path.startswith("/api/invoices/"): result=self.db.delete_invoice(int(path.rsplit("/",1)[-1]),user["id"])
             elif path.startswith("/api/journal/"): result=self.db.delete_journal_voucher(int(path.rsplit("/",1)[-1]),user["id"])
             elif path.startswith("/api/opening-vouchers/"):
