@@ -309,6 +309,13 @@ class Database:
             if "retro_tax" not in payroll_columns: db.execute("ALTER TABLE payroll_records ADD COLUMN retro_tax TEXT NOT NULL DEFAULT '0'")
             db.execute("""UPDATE OR IGNORE payroll_records SET period_date=substr(period_date,7,4)||'-'||substr(period_date,4,2)||'-'||substr(period_date,1,2)
                 WHERE period_date GLOB '??-??-????'""")
+            # Older versions saved payroll dates exactly as typed (DD-MM-YYYY, DDMMYYYY...). Store them as YYYY-MM-DD.
+            for table,column in (("payroll_settings","date_from"),("payroll_settings","date_to"),("payroll_records","period_date"),
+                                 ("payroll_records","retro_from"),("payroll_records","retro_to")):
+                for row in db.execute(f"SELECT id,{column} value FROM {table} WHERE {column} IS NOT NULL AND {column}<>''").fetchall():
+                    try: fixed=iso_date(row["value"])
+                    except ValueError: continue
+                    if fixed!=row["value"]: db.execute(f"UPDATE OR IGNORE {table} SET {column}=? WHERE id=?",(fixed,row["id"]))
             user_columns={row["name"] for row in db.execute("PRAGMA table_info(users)")}
             if "expires_at" not in user_columns: db.execute("ALTER TABLE users ADD COLUMN expires_at TEXT")
             if "permissions" not in user_columns: db.execute("ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '{}'")

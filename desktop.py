@@ -47,6 +47,11 @@ def parse_user_date(value):
 def formatted_user_date(value):
     return parse_user_date(value).strftime("%d-%m-%Y")
 
+def safe_display_date(value):
+    """Show a saved date as DD-MM-YYYY; keep the original text if it is in another format."""
+    try: return formatted_user_date(value)
+    except (ValueError, TypeError): return "" if value is None else str(value)
+
 def natural_sort_value(value):
     text=str(value or "").strip()
     try: return (0,float(text.replace(",","")))
@@ -1465,7 +1470,7 @@ class SaberApp(FinalFeaturesMixin, tk.Tk):
         self.payroll_employee_combo["values"]=list(self.payroll_employee_map)
         if not self.payroll_employee.get() and self.payroll_employee_map: self.payroll_employee.set(next(iter(self.payroll_employee_map)))
         self.payroll_tree.delete(*self.payroll_tree.get_children())
-        for row in payroll: self.payroll_tree.insert("","end",iid=str(row["id"]),values=(row["payroll_number"],formatted_user_date(row["period_date"]),row["full_name"],row["currency"],f'{float(row["gross_salary"]):,.2f}',f'{float(row["income_tax"]):,.2f}',f'{float(row["employee_nssf"]):,.2f}',f'{float(row["net_salary"]):,.2f}',row["status"]))
+        for row in payroll: self.payroll_tree.insert("","end",iid=str(row["id"]),values=(row["payroll_number"],safe_display_date(row["period_date"]),row["full_name"],row["currency"],f'{float(row["gross_salary"]):,.2f}',f'{float(row["income_tax"]):,.2f}',f'{float(row["employee_nssf"]):,.2f}',f'{float(row["net_salary"]):,.2f}',row["status"]))
 
     def payroll_payload(self):
         employee=self.payroll_employee_map.get(self.payroll_employee.get())
@@ -1482,7 +1487,7 @@ class SaberApp(FinalFeaturesMixin, tk.Tk):
         except Exception as exc: return messagebox.showerror("Payroll",str(exc))
         retro=f' (of which retro tax {result["retro_tax"]:,.2f})' if result.get("retro_tax") else ""
         rules=result.get("settings_period") or {}
-        period=f' | Rules from {formatted_user_date(rules["date_from"])}' if rules.get("date_from") else ""
+        period=f' | Rules from {safe_display_date(rules["date_from"])}' if rules.get("date_from") else ""
         self.payroll_result.set(f'Gross: {result["gross_salary"]:,.2f} | Tax: {result["income_tax"]:,.2f} {result["currency"]} ({result["income_tax_lbp"]:,.0f} LBP){retro} | Employee NSSF: {result["employee_nssf"]:,.2f} | Employer NSSF: {result["employer_medical"]+result["employer_family"]+result["employer_end_service"]:,.2f} | Net: {result["net_salary"]:,.2f}{period}')
 
     def save_payroll(self):
@@ -1504,7 +1509,7 @@ class SaberApp(FinalFeaturesMixin, tk.Tk):
         except Exception as exc: return messagebox.showerror("Payroll Settings",str(exc))
         for key,var in self.payroll_setting_vars.items():
             value=settings.get(key,"") if settings.get(key) is not None else ""
-            var.set(formatted_user_date(value) if key in ("date_from","date_to") and value else value)
+            var.set(safe_display_date(value) if key in ("date_from","date_to") and value else value)
         for key,var in self.payroll_employee_accounts.items(): var.set(settings.get("employee_account_map",{}).get(key,""))
         for key,var in self.payroll_manager_accounts.items(): var.set(settings.get("manager_account_map",{}).get(key,""))
         self.payroll_brackets.delete("1.0","end"); self.payroll_brackets.insert("1.0",json.dumps(settings.get("tax_brackets",[])))

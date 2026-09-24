@@ -227,6 +227,20 @@ class UsersAlertsAndRatesTest(unittest.TestCase):
         self.assertEqual((alerts["expired"], alerts["expiring"]), (1, 1))
         self.assertEqual(alerts["items"][0]["document_type"], "Contract"); self.assertEqual(alerts["items"][0]["status"], "expired")
 
+    def test_old_payroll_date_formats_are_migrated_and_displayed(self):
+        employee = self.db.save_employee({"employee_number": "1000", "full_name": "Legacy", "currency": "LBP", "base_salary": "1000"}, self.user)
+        with self.db.connect() as db:
+            db.execute("UPDATE payroll_settings SET date_from='01012025'")
+            db.execute("""INSERT INTO payroll_records(payroll_number,employee_id,period_date,currency,retro_from,created_at)
+                VALUES('PAY-OLD-1',?,'30062025','LBP','01-01-2025','x'),('PAY-OLD-2',?,'June 2025','LBP',NULL,'x')""", (employee["id"], employee["id"]))
+        self.db.initialize("secret")
+        periods = {r["payroll_number"]: r for r in self.db.list_payroll()}
+        self.assertEqual(periods["PAY-OLD-1"]["period_date"], "2025-06-30"); self.assertEqual(periods["PAY-OLD-1"]["retro_from"], "2025-01-01")
+        self.assertEqual(periods["PAY-OLD-2"]["period_date"], "June 2025")  # unreadable text is kept, not lost
+        self.assertEqual(self.db.list_payroll_settings()[0]["date_from"], "2025-01-01")
+        from desktop import safe_display_date
+        self.assertEqual(safe_display_date("2025-06-30"), "30-06-2025"); self.assertEqual(safe_display_date("June 2025"), "June 2025")
+
     def test_exchange_rate_lookup_is_chronological(self):
         self.db.save_exchange_rate({"date_from": "01-06-2025", "date_to": "01-06-2025", "from_currency": "AED", "to_currency": "LBP", "rate": "24000"}, self.user)
         self.db.save_exchange_rate({"date_from": "01-07-2025", "date_to": "01-07-2025", "from_currency": "AED", "to_currency": "LBP", "rate": "25000"}, self.user)
