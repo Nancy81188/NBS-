@@ -11,6 +11,7 @@ from importer import read_customs_costs, read_expenses, read_invoices
 from pdf_import import read_invoice_pdf
 
 NAVY, GOLD, LIGHT = "#071b2e", "#c9a96a", "#f3f6f8"
+PURCHASE_USES = {"Mixed (partial deduction)": "mixed", "Taxable sales only (100%)": "taxable", "Exempt sales only (0%)": "exempt"}
 RED, MUTED = "#8B1E1E", "#5f6b76"
 TYPES = {"Purchases": ("purchase", "purchases"), "Sales": ("sale", "sales"), "Expenses": ("purchase", "expenses"), "Assets": ("purchase", "assets")}
 METHODS = ["Cash", "Cheque", "Bank Transfer", "Card", "Other"]
@@ -291,6 +292,7 @@ class Stage3Mixin:
         f = {"id": None, "pdf": None, "vars": {k: tk.StringVar() for k in ("supplier", "number", "date", "due", "currency", "type", "taxable", "exempt", "rate", "vat", "account", "vat_account")}}
         v = f["vars"]; v["date"].set(datetime.now().strftime("%d-%m-%Y")); v["currency"].set("USD"); v["type"].set("Purchases"); v["rate"].set("11"); v["account"].set("601100000"); v["vat_account"].set("442660000")
         f["department"] = tk.StringVar(); f["project"] = tk.StringVar(); f["vat_typed"] = False; self.purchase_form = f
+        f["use"] = tk.StringVar(value="Mixed (partial deduction)"); f["reverse"] = tk.BooleanVar(value=False)
         box = tk.LabelFrame(page, text="Purchase Invoice", bg=LIGHT, padx=8, pady=5); box.pack(fill="x", padx=8, pady=(6, 3))
         r1 = tk.Frame(box, bg=LIGHT); r1.pack(fill="x")
         tk.Label(r1, text="Supplier", bg=LIGHT, font=("Segoe UI", 9, "bold")).pack(side="left")
@@ -310,13 +312,16 @@ class Stage3Mixin:
         tk.Label(r2, text="VAT A/C", bg=LIGHT).pack(side="left"); self.account_search_box(r2, v["vat_account"], 11).pack(side="left", padx=4)
         r3 = tk.Frame(box, bg=LIGHT); r3.pack(fill="x", pady=(5, 0))
         self.dimension_selectors(r3, f["department"], f["project"])
-        f["pdf_label"] = tk.Label(r3, text="No PDF", bg=LIGHT, fg=MUTED); f["pdf_label"].pack(side="left", padx=6)
+        tk.Label(r3, text="VAT use", bg=LIGHT).pack(side="left"); ttk.Combobox(r3, textvariable=f["use"], values=list(PURCHASE_USES), state="readonly", width=23).pack(side="left", padx=(4, 6))
+        tk.Checkbutton(r3, text="Reverse charge", variable=f["reverse"], bg=LIGHT).pack(side="left")
         r4 = tk.Frame(box, bg=LIGHT); r4.pack(fill="x", pady=(5, 0))
+        f["pdf_label"] = tk.Label(r4, text="No PDF", bg=LIGHT, fg=MUTED)
         self.action_button(r4, "New", self.new_purchase).pack(side="left", padx=(0, 3))
         tk.Button(r4, text="Save", command=self.save_purchase, bg=GOLD, fg=NAVY, border=0, padx=18, pady=6, font=("Segoe UI", 9, "bold")).pack(side="left", padx=3)
         tk.Button(r4, text="Delete", command=self.delete_purchase, bg=RED, fg="white", border=0, padx=12, pady=6).pack(side="left", padx=3)
         self.action_button(r4, "Upload PDF", self.choose_purchase_pdf).pack(side="left", padx=3)
         self.action_button(r4, "Attachments", lambda: self.purchase_attachments()).pack(side="left", padx=3)
+        f["pdf_label"].pack(side="left", padx=8)
         cost = tk.LabelFrame(page, text="Cost on Purchase (customs / freight / insurance) for the selected purchase", bg=LIGHT, padx=8, pady=4); cost.pack(fill="x", padx=8, pady=3)
         f["lc"] = {k: tk.StringVar() for k in ("freight", "insurance", "customs_duties", "broker_fees", "other_costs", "import_vat", "customs_declaration_no", "party_name")}
         f["lc"]["party_name"].set("Lebanese Customs")
@@ -356,6 +361,7 @@ class Stage3Mixin:
         f = self.purchase_form; v = f["vars"]; f["id"] = None; f["pdf"] = None; f["vat_typed"] = False
         for key in ("supplier", "number", "due", "taxable", "exempt", "vat"): v[key].set("")
         v["date"].set(datetime.now().strftime("%d-%m-%Y")); v["rate"].set("11"); v["type"].set("Purchases"); f["department"].set("(none)"); f["project"].set("(none)")
+        f["use"].set("Mixed (partial deduction)"); f["reverse"].set(False)
         f["pdf_label"].config(text="No PDF", fg=MUTED); f["total"].config(text="Total: 0.00"); f["tree"].selection_remove(*f["tree"].selection())
 
     def choose_purchase_pdf(self):
@@ -384,7 +390,8 @@ class Stage3Mixin:
         invoice = {"invoice_number": v["number"].get().strip(), "invoice_date": v["date"].get().strip(), "due_date": v["due"].get().strip(), "party_name": party["name"] if party else v["supplier"].get().strip(),
                    "kind": "assets" if v["type"].get() == "Assets" else "purchases", "currency": v["currency"].get(), "status": "posted", "source_file": "Purchase Invoice",
                    "expense_account": v["account"].get().split(" - ", 1)[0].strip() or "601100000", "vat_account": v["vat_account"].get().split(" - ", 1)[0].strip() or "442660000",
-                   "department": self.dimension_code(f["department"].get()), "project": self.dimension_code(f["project"].get())}
+                   "department": self.dimension_code(f["department"].get()), "project": self.dimension_code(f["project"].get()),
+                   "vat_use": PURCHASE_USES.get(f["use"].get(), "mixed"), "vat_treatment": "reverse_charge" if f["reverse"].get() else "standard"}
         if party and party.get("account_number"): invoice["supplier_account"] = party["account_number"]
         line = {"description": f"Supplier invoice {invoice['invoice_number']}".strip(), "quantity": 1, "unit_price": taxable, "deductible_subtotal": taxable,
                 "non_deductible_subtotal": exempt, "vat_rate": rate, "vat": vat}
@@ -456,6 +463,7 @@ class Stage3Mixin:
         lists = self.dimension_lists()
         f["department"].set(next((f'{d["code"]} - {d["name"]}' for d in lists["departments"] if d["id"] == row.get("department_id")), "(none)"))
         f["project"].set(next((f'{p["code"]} - {p["name"]}' for p in lists["projects"] if p["id"] == row.get("project_id")), "(none)"))
+        f["use"].set(next((k for k, val in PURCHASE_USES.items() if val == (row.get("vat_use") or "mixed")), "Mixed (partial deduction)")); f["reverse"].set(row.get("vat_treatment") == "reverse_charge")
         f["pdf_label"].config(text=f"Editing {row['invoice_number']} ({row.get('attachment_count') or 0} document(s) attached)", fg=NAVY); self.purchase_amounts_changed("none")
 
     def delete_purchase(self):
@@ -531,6 +539,7 @@ class Stage3Mixin:
         v = f["vars"]; v["date"].set(datetime.now().strftime("%d-%m-%Y")); v["currency"].set("USD"); v["category"].set("General")
         v["account"].set("601100000"); v["no_vat_account"].set("601100001"); v["vat_account"].set("442660000"); v["payment_account"].set("531")
         f["department"] = tk.StringVar(); f["project"] = tk.StringVar(); f["non_deductible"] = tk.BooleanVar(value=False); f["vat_typed"] = False; self.expense_form = f
+        f["use"] = tk.StringVar(value="Mixed (partial deduction)")
         box = tk.LabelFrame(page, text="Expense", bg=LIGHT, padx=8, pady=5); box.pack(fill="x", padx=8, pady=6)
         r1 = tk.Frame(box, bg=LIGHT); r1.pack(fill="x")
         f["number_label"] = tk.Label(r1, text="New expense", bg=LIGHT, fg=NAVY, font=("Segoe UI", 9, "bold")); f["number_label"].pack(side="left", padx=(0, 10))
@@ -550,6 +559,7 @@ class Stage3Mixin:
             tk.Label(r3, text=label, bg=LIGHT).pack(side="left"); self.account_search_box(r3, v[key], 11).pack(side="left", padx=(4, 8))
         r4 = tk.Frame(box, bg=LIGHT); r4.pack(fill="x", pady=(5, 0))
         self.dimension_selectors(r4, f["department"], f["project"])
+        tk.Label(r4, text="VAT used for", bg=LIGHT).pack(side="left"); ttk.Combobox(r4, textvariable=f["use"], values=list(PURCHASE_USES), state="readonly", width=24).pack(side="left", padx=4)
         f["pdf_label"] = tk.Label(r4, text="No PDF", bg=LIGHT, fg=MUTED); f["pdf_label"].pack(side="left", padx=6)
         r5 = tk.Frame(box, bg=LIGHT); r5.pack(fill="x", pady=(5, 0))
         self.action_button(r5, "New", self.new_expense).pack(side="left", padx=(0, 3))
@@ -602,7 +612,8 @@ class Stage3Mixin:
                 "with_vat_subtotal": amounts["with_vat"], "without_vat_subtotal": amounts["without_vat"], "vat": amounts["vat"], "reference": v["reference"].get().strip(),
                 "expense_account": v["account"].get().split(" - ", 1)[0].strip(), "expense_without_vat_account": v["no_vat_account"].get().split(" - ", 1)[0].strip(),
                 "vat_account": v["vat_account"].get().split(" - ", 1)[0].strip(), "payment_account": v["payment_account"].get().split(" - ", 1)[0].strip(),
-                "vat_recoverable": not f["non_deductible"].get(), "department": self.dimension_code(f["department"].get()), "project": self.dimension_code(f["project"].get())}
+                "vat_recoverable": not f["non_deductible"].get(), "department": self.dimension_code(f["department"].get()), "project": self.dimension_code(f["project"].get()),
+                "vat_use": PURCHASE_USES.get(f["use"].get(), "mixed")}
 
     def save_expense(self):
         f = self.expense_form
@@ -637,6 +648,7 @@ class Stage3Mixin:
                            ("vat_account", r["vat_account"]), ("payment_account", r["payment_account"])):
             v[key].set(value)
         f["non_deductible"].set(not r.get("vat_recoverable", 1)); lists = self.dimension_lists()
+        f["use"].set(next((k for k, val in PURCHASE_USES.items() if val == (r.get("vat_use") or "mixed")), "Mixed (partial deduction)"))
         f["department"].set(next((f'{d["code"]} - {d["name"]}' for d in lists["departments"] if d["id"] == r.get("department_id")), "(none)"))
         f["project"].set(next((f'{p["code"]} - {p["name"]}' for p in lists["projects"] if p["id"] == r.get("project_id")), "(none)"))
         f["number_label"].config(text=f"Editing {r.get('expense_number') or r['id']}"); f["pdf_label"].config(text=f"{r.get('attachment_count') or 0} document(s) attached", fg=NAVY)

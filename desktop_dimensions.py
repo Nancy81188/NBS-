@@ -44,7 +44,7 @@ class DimensionsMixin:
         tk.Label(parent, text="Department", bg=LIGHT).pack(side="left")
         department = ttk.Combobox(parent, textvariable=department_var, values=self.department_choices(include_all), state="readonly", width=20); department.pack(side="left", padx=(4, 10))
         tk.Label(parent, text="Project", bg=LIGHT).pack(side="left")
-        project = ttk.Combobox(parent, textvariable=project_var, values=self.project_choices(include_all), state="readonly", width=24); project.pack(side="left", padx=(4, 10))
+        project = ttk.Combobox(parent, textvariable=project_var, values=self.project_choices(include_all), state="readonly", width=21); project.pack(side="left", padx=(4, 10))
         def refresh(_event=None):
             self.dimension_lists(refresh=True); department["values"] = self.department_choices(include_all); project["values"] = self.project_choices(include_all)
         department.bind("<Button-1>", refresh, add="+"); project.bind("<Button-1>", refresh, add="+")

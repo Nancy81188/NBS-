@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -19,6 +20,7 @@ from server import run_server
 import vat_return
 import ledger_reports
 import year_end
+import inventory
 from company_manager import CompanyManager
 from database import utcnow
 
@@ -165,7 +167,8 @@ class QuarterlyVatTest(unittest.TestCase):
                                       [{"description": "Q2", "quantity": 1, "unit_price": 1000, "vat_rate": 11}], self.user)
         q2 = vat_return.build_vat_return(self.db, 2025, 2)
         self.assertEqual(q2["credit_brought_forward_lbp"], saved["credit_carried_forward_lbp"])
-        self.assertEqual(q2["payable_lbp"], 110 * 89500 - saved["credit_carried_forward_lbp"])
+        # MoF decision 1195: VAT due is rounded up to the nearest LBP 10,000 (from 25-11-2024)
+        self.assertEqual(q2["payable_lbp"], 6810000); self.assertEqual(q2["net_after_credit_lbp"], 110 * 89500 - saved["credit_carried_forward_lbp"])
         self.db.create_manual_invoice({"invoice_date": "28-03-2025", "party_name": "Client", "kind": "sales", "currency": "USD", "status": "posted"},
                                       [{"description": "After filing", "quantity": 1, "unit_price": 10, "vat_rate": 11}], self.user)
         self.assertTrue(vat_return.build_vat_return(self.db, 2025, 1)["changed_since_saved"])
@@ -187,7 +190,7 @@ class QuarterlyVatTest(unittest.TestCase):
         xlsx = Path(self.folder.name) / "vat.xlsx"; pdf = Path(self.folder.name) / "vat.pdf"
         export_sections_excel(xlsx, title, meta, sections); export_sections_pdf(pdf, title, meta, sections)
         values = [c.value for row in load_workbook(xlsx).active.iter_rows() for c in row if c.value]
-        self.assertIn("Credit carried forward to next quarter", values)
+        self.assertIn("Credit carried forward to the next period", values); self.assertIn("Partial deduction right (Art. 31)", values)
         self.assertTrue(pdf.read_bytes().startswith(b"%PDF"))
 
 
@@ -512,6 +515,116 @@ class LebanesePayrollRulesTest(unittest.TestCase):
         self.assertAlmostEqual(sum(r["debit"] - r["credit"] for r in self.db.journal()), 0, places=2)
         nssf = [r for r in self.db.journal() if r["account_code"] == "447100001"]
         self.assertAlmostEqual(sum(r["debit"] for r in nssf), 62.18, places=2)
+
+class LebaneseVatLawTest(unittest.TestCase):
+    """Partial deduction (Art. 31), zero-rated and exempt supplies, reverse charge (Art. 40), Q4 adjustment and refund (Art. 30)."""
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
+        self.db.save_exchange_rate({"date_from": "01-01-2025", "date_to": "31-12-2025", "from_currency": "USD", "to_currency": "LBP", "rate": "89500"}, self.user)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def sale(self, date, amount, treatment="standard", rate=11):
+        return self.db.create_manual_invoice({"invoice_date": date, "party_name": "Client", "kind": "sales", "currency": "USD", "status": "posted", "vat_treatment": treatment},
+                                             [{"description": "S", "quantity": 1, "unit_price": amount, "vat_rate": rate}], self.user)
+
+    def purchase(self, date, amount, use="mixed", treatment="standard", rate=11):
+        return self.db.create_manual_invoice({"invoice_date": date, "party_name": "Supplier", "kind": "purchases", "currency": "USD", "status": "posted", "vat_use": use, "vat_treatment": treatment},
+                                             [{"description": "P", "quantity": 1, "unit_price": amount, "vat_rate": rate}], self.user)
+
+    def test_supply_types_and_partial_deduction(self):
+        self.sale("10-02-2025", 6000); self.sale("11-02-2025", 2000, "zero_rated", 0); self.sale("12-02-2025", 2000, "exempt", 0)
+        self.purchase("15-02-2025", 1000, "mixed"); self.purchase("16-02-2025", 500, "taxable"); self.purchase("17-02-2025", 300, "exempt")
+        result = vat_return.build_vat_return(self.db, 2025, 1); usd = result["per_currency"]["USD"]
+        self.assertEqual(result["deduction_ratio"], Decimal("0.8"))  # (6000 + 2000) / 10000
+        self.assertEqual((usd["sales"]["base"], usd["sales_zero"]["base"], usd["sales_exempt"]["base"]), (6000, 2000, 2000))
+        self.assertEqual(usd["prorata"]["vat"], Decimal("-22.00"))  # 20% of the 110 mixed-use VAT
+        self.assertEqual(usd["total_input"]["vat"], Decimal("143.00"))  # 110 + 55 - 22 ; the 33 on exempt-use purchases is blocked
+        self.assertEqual(usd["non_deductible"]["vat"], Decimal("55.00"))
+        self.assertEqual(usd["net"]["vat"], Decimal("517.00"))
+        self.db.save_vat_provisional_ratio(2025, "90", self.user)
+        self.assertEqual(vat_return.build_vat_return(self.db, 2025, 1)["deduction_ratio"], Decimal("0.9"))
+        with self.assertRaisesRegex(ValueError, "VAT treatment"): self.sale("10-02-2025", 1, "luxury")
+
+    def test_q4_final_ratio_adjusts_the_year(self):
+        self.db.save_vat_provisional_ratio(2025, "100", self.user)
+        self.sale("10-02-2025", 5000); self.purchase("15-02-2025", 1000, "mixed")
+        vat_return.save_return(self.db, 2025, 1, self.user)
+        self.sale("10-11-2025", 1000, "exempt", 0)  # year turnover: 5000 taxable, 5000... ratio = 5000 / 6000
+        self.sale("11-11-2025", 4000, "exempt", 0)
+        q4 = vat_return.build_vat_return(self.db, 2025, 4)
+        self.assertEqual(q4["deduction_ratio"], Decimal("0.5")); self.assertEqual(q4["ratio_source"], "final annual ratio")
+        self.assertEqual(q4["totals_lbp"]["annual_adjustment"], -4922500)  # Q1 mixed VAT 110 USD = 9,845,000 LBP x (50% - 100%)
+        self.assertEqual(q4["annual_adjustment_detail"][0]["ratio_applied"], Decimal("1"))
+
+    def test_reverse_charge_refund_and_due_dates(self):
+        self.purchase("10-05-2025", 1000, "taxable", "reverse_charge", 0)  # software from abroad, no VAT on the invoice
+        usd = vat_return.build_vat_return(self.db, 2025, 2)["per_currency"]["USD"]
+        self.assertEqual((usd["reverse_output"]["vat"], usd["purchases"]["vat"], usd["net"]["vat"]), (110, 110, 0))
+        self.purchase("12-05-2025", 10000, "taxable")
+        with self.assertRaisesRegex(ValueError, "cannot exceed"): vat_return.build_vat_return(self.db, 2025, 2, refund_requested="999999999999")
+        result = vat_return.build_vat_return(self.db, 2025, 2, refund_requested="10000000")
+        self.assertEqual(result["credit_carried_forward_lbp"], 1100 * 89500 - 10000000); self.assertTrue(result["warnings"])
+        self.assertEqual(vat_return.due_date(2025, 1), "2025-04-20"); self.assertEqual(vat_return.due_date(2026, 1), "2026-04-30")
+
+class InventoryTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); root = Path(self.folder.name)
+        self.master = Database(root / "master.db"); self.master.initialize("secret")
+        self.manager = CompanyManager(root / "master.db"); self.company = self.manager.list_companies()[0]["id"]; self.db = self.manager.database(self.company, 2024); u = self.user = 1
+        self.store = inventory.save_warehouse(self.db, {"name": "Site Store"}, u)
+        self.hpl = inventory.save_item(self.db, {"name": "HPL Panel", "unit": "sheet", "sales_price": "120", "reorder_level": "80", "category": "Cladding"}, u)
+        self.alu = inventory.save_item(self.db, {"name": "Aluminium Profile", "unit": "m", "sales_price": "15"}, u)
+        inventory.save_document(self.db, {"doc_type": "opening", "doc_date": "01-01-2024", "warehouse_id": "MAIN"}, [{"sku": self.hpl["sku"], "quantity": 50, "unit_cost": 80}, {"sku": self.alu["sku"], "quantity": 200, "unit_cost": 8}], u)
+        inventory.save_document(self.db, {"doc_type": "receipt", "doc_date": "10-02-2024", "warehouse_id": "MAIN"}, [{"sku": self.hpl["sku"], "quantity": 50, "unit_cost": 100}], u)
+        self.db.save_party({"kind": "customer", "name": "Tower Client", "account_category": "client"}, u)
+        self.invoice = self.db.create_manual_invoice({"invoice_date": "15-03-2024", "party_name": "Tower Client", "kind": "sales", "currency": "USD", "status": "posted"},
+                                                     [{"description": "HPL", "quantity": 30, "unit_price": 120, "item_code": self.hpl["sku"]}], u)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def item(self, sku): return next(i for i in inventory.list_items(self.db) if i["sku"] == sku)
+
+    def test_codes_average_cost_and_invoice_issue(self):
+        self.assertEqual((self.hpl["sku"], self.alu["sku"], self.store["code"]), ("ITM-00001", "ITM-00002", "WH01"))
+        hpl = self.item("ITM-00001"); self.assertEqual((hpl["quantity"], hpl["average_cost"], hpl["stock_value"]), (70, 90, 6300))
+        with self.assertRaisesRegex(ValueError, "Not enough stock"):
+            self.db.create_manual_invoice({"invoice_date": "16-03-2024", "party_name": "Tower Client", "kind": "sales", "currency": "USD", "status": "posted"},
+                                          [{"description": "HPL", "quantity": 500, "unit_price": 120, "item_code": "ITM-00001"}], self.user)
+        self.assertEqual(len(self.db.list_invoices()), 1)  # the refused invoice is not kept
+        self.db.delete_invoice(self.invoice, self.user); self.assertEqual(self.item("ITM-00001")["quantity"], 100)
+
+    def test_transfer_adjustment_fifo_and_negative_protection(self):
+        inventory.save_document(self.db, {"doc_type": "transfer", "doc_date": "20-03-2024", "warehouse_id": "MAIN", "to_warehouse_id": "WH01"}, [{"sku": "ITM-00001", "quantity": 10}], self.user)
+        with self.assertRaisesRegex(ValueError, "Not enough stock of ITM-00001 in WH01"):
+            inventory.save_document(self.db, {"doc_type": "adjustment_out", "doc_date": "21-03-2024", "warehouse_id": "WH01"}, [{"sku": "ITM-00001", "quantity": 11}], self.user)
+        inventory.save_document(self.db, {"doc_type": "adjustment_out", "doc_date": "21-03-2024", "warehouse_id": "WH01"}, [{"sku": "ITM-00001", "quantity": 2}], self.user)
+        valuation = inventory.build_report(self.db, "valuation", {"date_to": "31-12-2024"})["sections"]
+        self.assertEqual(float(valuation[0]["rows"][-1][6]), 68 * 90 + 1600); self.assertEqual(valuation[1]["heading"], "Value by warehouse")
+        fifo = inventory.build_report(self.db, "valuation", {"date_to": "31-12-2024", "method": "fifo"})["sections"][0]["rows"][-1]
+        self.assertEqual(float(fifo[6]), 18 * 80 + 50 * 100 + 1600)  # oldest layer (80) consumed first
+        card = inventory.build_report(self.db, "stock_card", {"item_id": self.hpl["id"], "date_from": "01-01-2024", "date_to": "31-12-2024", "warehouse_id": self.store["id"]})["sections"][0]["rows"]
+        self.assertEqual(float(card[-1][-2]), 8)
+        margin = inventory.build_report(self.db, "margin", {"date_to": "31-12-2024"})["sections"][0]["rows"][0]
+        self.assertEqual([float(x) for x in margin[2:6]], [30, 3600, 2700, 900])
+        reorder = inventory.build_report(self.db, "reorder", {"date_to": "31-12-2024"})["sections"][0]["rows"]
+        self.assertEqual(reorder[0][0], "ITM-00001")
+        inventory.save_document(self.db, {"doc_type": "issue", "doc_date": "22-03-2024", "warehouse_id": "MAIN"}, [{"sku": "ITM-00001", "quantity": 55}], self.user)
+        receipt = next(d for d in inventory.list_documents(self.db) if d["doc_type"] == "receipt")
+        with self.assertRaisesRegex(ValueError, "cannot be deleted"): inventory.delete_document(self.db, receipt["id"], self.user)  # 60 on hand before, 55 already issued
+
+    def test_stock_variation_and_next_year_opening(self):
+        result = self.manager.close_and_open_year(self.company, 2024, self.user)
+        variation = [(r["account_code"], r["debit"], r["credit"]) for r in self.db.journal() if (r["description"] or "").startswith("STOCK VARIATION")]
+        self.assertEqual(variation, [("37", 7900.0, 0.0), ("6052", 0.0, 7900.0)])
+        self.assertEqual(len(result["stock_openings"]), 1)
+        next_year = self.manager.database(self.company, 2025)
+        self.assertEqual([(i["sku"], i["quantity"], i["average_cost"]) for i in inventory.list_items(next_year)], [("ITM-00001", 70, 90), ("ITM-00002", 200, 8)])
+        stock_line = next(r for r in ledger_reports.build_account_report(next_year, {"first_column": "USD", "second_column": "none"})["sections"][0]["rows"] if r[0] == "37")
+        self.assertEqual(float(stock_line[-1]), 7900)
+        inventory.save_document(next_year, {"doc_type": "receipt", "doc_date": "10-02-2025", "warehouse_id": "MAIN"}, [{"sku": "ITM-00001", "quantity": 10, "unit_cost": 100}], self.user)
+        second = inventory.post_stock_variation(next_year, 2025, self.user)
+        self.assertEqual((second["opening"], second["closing"]), (7900, 8900))
 
 class StandaloneEndToEndTest(unittest.TestCase):
     """Runs the embedded data service exactly as the installed app does and drives it through the API."""

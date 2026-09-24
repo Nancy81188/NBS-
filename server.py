@@ -13,6 +13,7 @@ from database import Database
 from company_manager import CompanyManager
 from payroll_reports import build_payroll_report, json_ready as payroll_json
 import ledger_reports
+import inventory
 import vat_return
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -115,6 +116,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                 data=year_end.closing_preview(self.db,int(self._query(parsed,"year")))
                 return self._json(200,{c:{"lines":[[code,float(a),float(l),float(u),name] for code,a,l,u,name in v["lines"]],"net_result":float(v["net_result"])} for c,v in data.items()})
             except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/inventory/"):
+            try:
+                if path == "/api/inventory/items": return self._json(200,{"items":inventory.list_items(self.db,self._query(parsed,"date"))})
+                if path == "/api/inventory/warehouses": return self._json(200,{"items":inventory.list_warehouses(self.db)})
+                if path == "/api/inventory/settings": return self._json(200,inventory.settings(self.db))
+                if path == "/api/inventory/documents": return self._json(200,{"items":inventory.list_documents(self.db)})
+                if path.startswith("/api/inventory/documents/"): return self._json(200,inventory.get_document(self.db,int(path.rsplit("/",1)[-1])))
+                if path == "/api/inventory/next-number": return self._json(200,{"number":inventory.next_number(self.db,self._query(parsed,"type"),self._query(parsed,"date"))})
+                if path == "/api/inventory/report":
+                    result=inventory.build_report(self.db,self._query(parsed,"report"),json.loads(self._query(parsed,"options","{}") or "{}"))
+                    return self._json(200,ledger_reports.json_ready(result))
+            except KeyError as exc: return self._json(404,{"error":str(exc).strip("'")})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/departments": return self._json(200,{"items":self.db.list_departments()})
         if path == "/api/projects": return self._json(200,{"items":self.db.list_projects()})
         if path == "/api/budgets":
@@ -129,7 +143,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/api/vat-return":
             try:
                 year=self._query(parsed,"year"); result=vat_return.build_vat_return(self.db,year,self._query(parsed,"quarter"),self._query(parsed,"currency"),
-                    self._query(parsed,"include_review","false").lower()=="true",self._previous_year_db(year),self._query(parsed,"credit_brought_forward"))
+                    self._query(parsed,"include_review","false").lower()=="true",self._previous_year_db(year),self._query(parsed,"credit_brought_forward"),self._query(parsed,"refund_requested"))
+                result["provisional_ratio"]=self.db.vat_provisional_ratio(year)
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,vat_return.json_ready(result))
         if path == "/api/vat-returns": return self._json(200,{"items":vat_return.list_saved_returns(self.db)})
@@ -330,6 +345,16 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/invoices/") and path.endswith("/landed-cost"):
             try: return self._json(201,{"invoice_id":self.db.add_landed_cost(int(path.split("/")[-2]),body,user["id"])})
             except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/inventory/"):
+            try:
+                if path == "/api/inventory/items": return self._json(201,{"item":inventory.save_item(self.db,body,user["id"])})
+                if path == "/api/inventory/warehouses": return self._json(201,{"item":inventory.save_warehouse(self.db,body,user["id"])})
+                if path == "/api/inventory/settings": return self._json(200,inventory.save_settings(self.db,body,user["id"]))
+                if path == "/api/inventory/documents":
+                    return self._json(201,inventory.save_document(self.db,body.get("header",{}),body.get("lines",[]),user["id"],body.get("id")))
+                if path == "/api/inventory/stock-variation": return self._json(200,inventory.post_stock_variation(self.db,body.get("year"),user["id"]))
+            except KeyError as exc: return self._json(404,{"error":str(exc).strip("'")})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path in ("/api/departments","/api/projects","/api/budgets"):
             try:
                 saver={"/api/departments":self.db.save_department,"/api/projects":self.db.save_project,"/api/budgets":self.db.save_budget}[path]
@@ -341,7 +366,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._json(201,{"adjustment_id":adjustment_id})
         if path == "/api/vat-return/save":
             try:
-                year=body.get("year"); result=vat_return.save_return(self.db,year,body.get("quarter"),user["id"],self._previous_year_db(year),body.get("credit_brought_forward"),user["username"])
+                year=body.get("year"); result=vat_return.save_return(self.db,year,body.get("quarter"),user["id"],self._previous_year_db(year),body.get("credit_brought_forward"),user["username"],body.get("refund_requested"))
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,vat_return.json_ready(result))
         if path == "/api/vat-return/reopen":
@@ -349,6 +374,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             try: result=vat_return.reopen_return(self.db,body.get("year"),body.get("quarter"),user["id"])
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,result)
+        if path == "/api/vat-ratio":
+            try: return self._json(200,{"ratio":vat_return.json_ready(self.db.save_vat_provisional_ratio(body.get("year"),body.get("ratio"),user["id"]))})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path == "/api/vat-classification":
+            try: return self._json(200,self.db.set_vat_classification(body.get("source"),body.get("id"),body.get("vat_treatment"),body.get("vat_use"),user["id"]))
+            except KeyError as exc: return self._json(404,{"error":str(exc).strip("'")})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/vat-recoverable":
             try: result=self.db.set_vat_recoverable(body.get("source"),body.get("id"),body.get("recoverable",True),user["id"])
             except KeyError as exc: return self._json(404,{"error":str(exc).strip("'")})
@@ -590,6 +622,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             if self._module_denied(user, path): return
             if path.startswith("/api/vat-return/adjustments/"): result=vat_return.delete_adjustment(self.db,int(path.rsplit("/",1)[-1]),user["id"])
+            elif path.startswith("/api/inventory/documents/"): result=inventory.delete_document(self.db,int(path.rsplit("/",1)[-1]),user["id"])
             elif path.startswith("/api/payments/"): result=self.db.delete_payment(int(path.rsplit("/",1)[-1]),user["id"])
             elif path.startswith("/api/expenses/"): result=self.db.delete_expense(int(path.rsplit("/",1)[-1]),user["id"])
             elif path.startswith("/api/invoices/"): result=self.db.delete_invoice(int(path.rsplit("/",1)[-1]),user["id"])

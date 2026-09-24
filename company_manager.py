@@ -99,6 +99,8 @@ class CompanyManager:
         if not previous: raise ValueError("Create fiscal years in chronological order")
         source=Database(previous["database"])
         path=self.root/company_id/f"{year}.db"; path.parent.mkdir(parents=True,exist_ok=True); target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
+        import inventory
+        inventory.carry_forward(source,target,year,user_id)
         company["years"].append({"year":year,"database":str(path.resolve()),"status":"open"}); company["years"].sort(key=lambda y:int(y["year"]))
         self._write(data); return company
 
@@ -130,6 +132,8 @@ class CompanyManager:
             db.execute("INSERT INTO audit_log(user_id,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?)",
                 (user_id,"refresh_opening","fiscal_year",target_year,json.dumps({"source_year":source_year,"replaced":len(ids)}),utcnow()))
         vouchers=self._opening_balances(source,target,target_year,user_id)
+        import inventory
+        inventory.carry_forward(source,target,target_year,user_id)
         return {"source_year":source_year,"target_year":target_year,"opening_vouchers":vouchers,"replaced":len(ids),"provisional":source_record.get("status")!="closed"}
 
     def close_and_open_year(self,company_id,year,user_id):
@@ -152,10 +156,12 @@ class CompanyManager:
             path=self.root/company_id/f"{next_year}.db"; path.parent.mkdir(parents=True,exist_ok=True)
             target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
         opening_vouchers=self._opening_balances(source,target,next_year,user_id)
+        import inventory
+        stock_openings=inventory.carry_forward(source,target,next_year,user_id)
         if not next_record: company["years"].append({"year":next_year,"database":str(path.resolve()),"status":"open"})
         company["years"].sort(key=lambda item:int(item["year"]))
         self._write(data)
-        return {**close_result,"company":company,"opening_vouchers":opening_vouchers}
+        return {**close_result,"company":company,"opening_vouchers":opening_vouchers,"stock_openings":stock_openings}
 
     def _copy_master_data(self,source,target):
         with source.connect() as src, target.connect() as dst:

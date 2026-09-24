@@ -18,8 +18,11 @@ from desktop_final import FinalFeaturesMixin
 from desktop_brains import BrainsScreensMixin
 from desktop_dimensions import DimensionsMixin
 from desktop_stage3 import Stage3Mixin
+from desktop_inventory import InventoryMixin
 
 NAVY, GOLD, LIGHT = "#071b2e", "#c9a96a", "#f3f6f8"
+SALE_TREATMENTS={"Taxable 11%":"standard","Zero-rated (export)":"zero_rated","Exempt (Art. 16-17)":"exempt","Out of scope":"out_of_scope"}
+PURCHASE_USES={"Mixed (partial deduction)":"mixed","Taxable sales only (100%)":"taxable","Exempt sales only (0%)":"exempt"}
 
 def resource_path(relative_path):
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -71,7 +74,7 @@ def natural_sort_value(value):
     try: return (0,float(text.replace(",","")))
     except ValueError: return (1,text.casefold())
 
-class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
+class SaberApp(InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Saber Accounting")
@@ -232,7 +235,7 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
 
     def main_screen(self):
         # Forget the widgets of the previous screen (switching company / year rebuilds every page).
-        for name in ("purchase_form","expense_form","payment_forms","trial_state","statement_state","voucher_sheet","budget_sheet","departments_tree","pr_tree","vat_summary_tree","_dimensions","_account_cache"):
+        for name in ("purchase_form","expense_form","payment_forms","trial_state","statement_state","voucher_sheet","budget_sheet","departments_tree","pr_tree","vat_summary_tree","_dimensions","_account_cache","items_tree","sd_find_box","warehouses_tree","ir_warehouse_box","ir_item_box","ir_category_box","stock_sheet"):
             self.__dict__.pop(name,None)
         self.clear(); lang=self.language.get()
         top=tk.Frame(self,bg=NAVY,height=76); top.pack(fill="x"); top.pack_propagate(False)
@@ -254,7 +257,7 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         filter_bar=tk.Frame(self,bg=LIGHT); filter_bar.pack(fill="x",padx=28)
         notebook.pack(fill="both",expand=True,padx=18,pady=(6,16))
         pages=[("dashboard_tab",tr(lang,"dashboard")),("invoices_tab",tr(lang,"invoices")),("sales_tab","Sales Invoice"),("manual_tab",tr(lang,"manual_entry")),
-            ("import_tab",tr(lang,"import")),("parties_tab",tr(lang,"customers_suppliers")),("transactions_tab",tr(lang,"payments_expenses")),("purchases_tab","Purchases & Expenses")]
+            ("import_tab",tr(lang,"import")),("parties_tab",tr(lang,"customers_suppliers")),("transactions_tab",tr(lang,"payments_expenses")),("purchases_tab","Purchases & Expenses"),("inventory_tab","Inventory")]
         if self.can_use("payroll"): pages.append(("payroll_tab","Payroll"))
         if self.can_use("vat"): pages.append(("vat_tab","Quarterly VAT"))
         pages+=[("journal_tab",tr(lang,"general_journal")),("trial_tab",tr(lang,"trial_balance")),("pnl_tab",tr(lang,"profit_loss")),("reports_tab",tr(lang,"financial_reports")),
@@ -276,7 +279,7 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         tk.Label(filter_bar,text="Show currency:",bg=LIGHT,font=("Segoe UI",10,"bold")).pack(side="left")
         currency_filter=ttk.Combobox(filter_bar,textvariable=self.view_currency,values=["All Currencies","USD","EUR","LBP","AED"],state="readonly",width=16)
         currency_filter.pack(side="left",padx=8); currency_filter.bind("<<ComboboxSelected>>",lambda _event:self.currency_changed())
-        builders=[self.build_dashboard,self.build_invoices,self.build_sales_invoice,self.build_manual,self.build_import,self.build_parties,self.build_transactions,self.build_purchases_expenses]
+        builders=[self.build_dashboard,self.build_invoices,self.build_sales_invoice,self.build_manual,self.build_import,self.build_parties,self.build_transactions,self.build_purchases_expenses,self.build_inventory]
         if self.can_use("payroll"): builders.append(self.build_payroll)
         if self.can_use("vat"): builders.append(self.build_vat_return)
         builders+=[self.build_journal,self.build_trial,self.build_profit_loss,self.build_financial_reports,self.build_statement,self.build_accounts,self.build_settings]
@@ -463,6 +466,7 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         self.action_button(lifecycle,"History",self.show_invoice_history).pack(side="left",padx=4)
         self.action_button(lifecycle,"Branded Invoice PDF",self.export_selected_invoice_pdf).pack(side="left",padx=4)
         self.action_button(lifecycle,"VAT Deductible / Non-Deductible",self.toggle_selected_invoice_vat).pack(side="left",padx=4)
+        self.action_button(lifecycle,"VAT Treatment",self.vat_classification_dialog).pack(side="left",padx=4)
         self.invoice_tree.bind("<Double-1>",lambda _event:self.edit_selected_invoice())
         self.load_invoices()
 
@@ -488,6 +492,30 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         for r in rows:
             lbp,usd=self.exchange_equivalents(float(r["total"] or 0),r["currency"],rates)
             self.invoice_tree.insert("","end",iid=str(r["id"]),values=(r["invoice_number"],r["invoice_date"],r["party_name"],r.get("branch_name") or "Head Office",r.get("entry_type") or r["kind"],r["currency"],r.get("deductible_subtotal",r["subtotal"]),r.get("non_deductible_subtotal",0),r["total"],r.get("payment_method") or "",r.get("amount_paid") or 0,"" if lbp is None else f"{lbp:,.2f}","" if usd is None else f"{usd:,.2f}",r["debit"],r["credit"],("Yes" if r.get("vat_recoverable",1) else "NO") if r.get("kind")=="purchase" and float(r.get("vat") or 0) else ""))
+
+    def vat_classification_dialog(self):
+        selected=self.invoice_tree.selection()
+        if not selected: return messagebox.showwarning("VAT Treatment","Select an invoice first")
+        row=self.invoice_rows.get(selected[0])
+        if not row: return
+        sale=row["kind"]=="sale"
+        window=tk.Toplevel(self); window.title(f"VAT Treatment - {row['invoice_number']}"); window.configure(bg=LIGHT); window.transient(self); window.grab_set()
+        treatment=tk.StringVar(); use=tk.StringVar(); reverse=tk.BooleanVar(value=row.get("vat_treatment")=="reverse_charge")
+        if sale:
+            treatment.set(next((k for k,v in SALE_TREATMENTS.items() if v==(row.get("vat_treatment") or "standard")),"Taxable 11%"))
+            tk.Label(window,text="Sale type (Law 379/2001)",bg=LIGHT,font=("Segoe UI",9,"bold")).grid(row=0,column=0,padx=12,pady=10,sticky="w")
+            ttk.Combobox(window,textvariable=treatment,values=list(SALE_TREATMENTS),state="readonly",width=24).grid(row=0,column=1,padx=12,pady=10)
+            tk.Label(window,text="Zero-rated: exports and like transactions (Art. 19-21), deductible input VAT.\nExempt: Art. 16-17 activities and goods, reduces the deduction ratio.",bg=LIGHT,fg="#5f6b76",justify="left").grid(row=1,column=0,columnspan=2,padx=12,sticky="w")
+        else:
+            use.set(next((k for k,v in PURCHASE_USES.items() if v==(row.get("vat_use") or "mixed")),"Mixed (partial deduction)"))
+            tk.Label(window,text="Input VAT used for",bg=LIGHT,font=("Segoe UI",9,"bold")).grid(row=0,column=0,padx=12,pady=10,sticky="w")
+            ttk.Combobox(window,textvariable=use,values=list(PURCHASE_USES),state="readonly",width=26).grid(row=0,column=1,padx=12,pady=10)
+            tk.Checkbutton(window,text="Service from abroad - reverse charge (Art. 40)",variable=reverse,bg=LIGHT).grid(row=1,column=0,columnspan=2,padx=12,sticky="w")
+        def save():
+            try: self.client.set_vat_classification("invoice",row["id"],SALE_TREATMENTS[treatment.get()] if sale else ("reverse_charge" if reverse.get() else "standard"),None if sale else PURCHASE_USES[use.get()])
+            except Exception as exc: return messagebox.showerror("VAT Treatment",str(exc),parent=window)
+            window.destroy(); self.load_invoices()
+        self.action_button(window,"Save",save).grid(row=2,column=0,columnspan=2,pady=12)
 
     def edit_selected_invoice(self):
         selected=self.invoice_tree.selection()
@@ -815,6 +843,10 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         tk.Label(payment,text="Branch",bg=LIGHT).pack(side="left"); self.branch_selector(payment,self.sales_branch,16,False).pack(side="left",padx=(4,10))
         dims=tk.Frame(header,bg=LIGHT); dims.grid(row=4,column=0,columnspan=8,sticky="w",pady=(6,0))
         self.sales_department=tk.StringVar(); self.sales_project=tk.StringVar(); self.dimension_selectors(dims,self.sales_department,self.sales_project)
+        self.sales_treatment=tk.StringVar(value="Taxable 11%")
+        tk.Label(dims,text="VAT Treatment",bg=LIGHT,font=("Segoe UI",9,"bold")).pack(side="left",padx=(6,4))
+        treatment_box=ttk.Combobox(dims,textvariable=self.sales_treatment,values=list(SALE_TREATMENTS),state="readonly",width=19); treatment_box.pack(side="left")
+        treatment_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_treatment_changed())
         self.sales_payment_method.trace_add("write",lambda *_args:self.sales_payment_changed())
         self.sales_exchange=tk.Label(header,text="",bg=LIGHT,fg="#5f6b76",anchor="w"); self.sales_exchange.grid(row=3,column=0,columnspan=8,sticky="w",pady=(6,0))
         self.sales_currency.trace_add("write",lambda *_args:self.update_sales_totals())
@@ -833,7 +865,7 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
             tk.Button(toolbar,text=text,command=lambda f=fmt:self.sales_entry_report(f),bg=NAVY,fg="white",border=0,padx=10,pady=7).pack(side="right",padx=2)
 
         sheet_frame=tk.Frame(self.sales_tab,bg=LIGHT); sheet_frame.pack(fill="both",expand=True,padx=10,pady=6)
-        self.sales_columns=[("description","Description",260),("quantity","Qty",60),("unit_price","Unit Price",100),("deductible_subtotal","Taxable Amount",115),
+        self.sales_columns=[("item_code","Item",90),("description","Description",220),("quantity","Qty",60),("unit_price","Unit Price",100),("deductible_subtotal","Taxable Amount",115),
             ("non_deductible_subtotal","Exempt Amount",110),("vat_rate","VAT %",65),("vat","VAT Amount",105),("total","Total",110)]
         self.sales_sheet=ttk.Treeview(sheet_frame,columns=[c[0] for c in self.sales_columns],show="headings",height=9)
         for key,label,width in self.sales_columns: self.sales_sheet.heading(key,text=label); self.sales_sheet.column(key,width=width,anchor="w" if key=="description" else "e")
@@ -841,11 +873,19 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         self.sales_sheet.pack(side="left",fill="both",expand=True); scroll.pack(side="right",fill="y")
         self.sales_sheet.bind("<Double-1>",self.edit_sales_cell); self.sales_sheet.bind("<Return>",self.edit_sales_cell)
         self.sales_sheet.bind("<Delete>",lambda _event:self.remove_sales_item())
-        tk.Label(self.sales_tab,text="Double-click (or Enter) on a cell to type. Tab / Enter moves to the next cell. VAT is 11% of the taxable amount unless you type another VAT amount.",bg=LIGHT,fg="#5f6b76").pack(anchor="w",padx=12)
+        tk.Label(self.sales_tab,text="Item: optional stock item code (the item name, price and stock issue are automatic). Double-click (or Enter) on a cell to type. Tab / Enter moves to the next cell. VAT is 11% of the taxable amount unless you type another VAT amount.",bg=LIGHT,fg="#5f6b76").pack(anchor="w",padx=12)
         self.sales_totals=tk.Label(self.sales_tab,text="",bg=LIGHT,fg=NAVY,font=("Segoe UI",11,"bold")); self.sales_totals.pack(anchor="e",padx=14,pady=(2,8))
         self.new_sales_invoice(confirm=False)
 
     # ---- sales invoice helpers
+    def sales_treatment_changed(self):
+        """Zero-rated and exempt sales carry no VAT: set every line to 0% (Taxable puts them back to 11%)."""
+        rate=11 if self.sales_treatment.get()=="Taxable 11%" else 0
+        for item in self.sales_items:
+            item["vat_rate"]=rate; item["_vat_typed"]=False; self.recalculate_sales_item(item)
+            if self.sales_sheet.exists(item.get("_iid","")): self.sales_sheet.item(item["_iid"],values=self.sales_row_values(item))
+        self.update_sales_totals()
+
     def sales_payment_changed(self):
         if self.sales_payment_method.get().startswith("On Account"): self.sales_amount_paid.set("0")
 
@@ -886,12 +926,12 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         self.sales_edit_id=None; self.sales_items=[]; self.sales_sheet.delete(*self.sales_sheet.get_children())
         self.sales_party.set(""); self.sales_supplier_account.set(""); self.sales_amount_paid.set("0"); self.sales_due_date.set(""); self.sales_open_choice.set("")
         self.sales_payment_method.set("On Account (Not Cash)"); self.sales_date.set(datetime.now().strftime("%d-%m-%Y"))
-        self.sales_department.set("(none)"); self.sales_project.set("(none)")
+        self.sales_department.set("(none)"); self.sales_project.set("(none)"); self.sales_treatment.set("Taxable 11%")
         self.sales_mode_label.config(text="NEW INVOICE",bg=GOLD); self.load_sales_customer_list(); self.refresh_sales_number()
         self.add_sales_item(); self.update_sales_totals()
 
     def sales_row_values(self,item):
-        return (item["description"],f'{item["quantity"]:g}',f'{item["unit_price"]:,.2f}',f'{item["deductible_subtotal"]:,.2f}',f'{item["non_deductible_subtotal"]:,.2f}',
+        return (item.get("item_code") or "",item["description"],f'{item["quantity"]:g}',f'{item["unit_price"]:,.2f}',f'{item["deductible_subtotal"]:,.2f}',f'{item["non_deductible_subtotal"]:,.2f}',
                 f'{item["vat_rate"]:g}',f'{item["vat"]:,.2f}',f'{item["total"]:,.2f}')
 
     def recalculate_sales_item(self,item):
@@ -910,7 +950,7 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         item["_iid"]=iid; self.update_sales_totals()
         if not item["description"]:
             self.sales_sheet.selection_set(iid); self.sales_sheet.focus(iid)
-            self.after(50,lambda:self.edit_sales_cell(column_index=0,iid=iid))
+            self.after(50,lambda:self.edit_sales_cell(column_index=1 if not getattr(self,"inventory_rows",None) else 0,iid=iid))
         return iid
 
     def sales_item_for(self,iid):
@@ -928,15 +968,22 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         if not iid or not tree.exists(iid) or not tree.winfo_ismapped(): return
         editable=[key for key,_label,_width in self.sales_columns if key!="total"]
         key=self.sales_columns[column_index][0]
-        if key=="total": key="description"; column_index=0
+        if key=="total": key="description"; column_index=1
         bbox=tree.bbox(iid,f"#{column_index+1}")
         if not bbox: return
         item=self.sales_item_for(iid); value=item.get(key,"")
-        editor=tk.Entry(tree,justify="left" if key=="description" else "right"); editor.insert(0,str(value if key=="description" else f"{float(value or 0):g}"))
+        editor=tk.Entry(tree,justify="left" if key in ("description","item_code") else "right"); editor.insert(0,str(value if key in ("description","item_code") else f"{float(value or 0):g}"))
         editor.place(x=bbox[0],y=bbox[1],width=bbox[2],height=bbox[3]); editor.focus_set(); editor.select_range(0,"end")
         def commit(move=0):
             text=editor.get().strip(); editor.destroy()
             if key=="description": item["description"]=text
+            elif key=="item_code":
+                product=self.item_by_code(text) if text else None
+                if text and not product: return messagebox.showwarning("Sales Invoice",f"Item {text} was not found (Inventory > Items)")
+                item["item_code"]=product["sku"] if product else ""
+                if product:
+                    item["description"]=product["name"]
+                    if product["sales_price"]: item["unit_price"]=product["sales_price"]; item["_taxable_typed"]=False; item["_vat_typed"]=False
             else:
                 try: number=float(text.replace(",","") or 0)
                 except ValueError: return messagebox.showwarning("Sales Invoice",f"{self.sales_columns[column_index][1]} must be a number")
@@ -1050,9 +1097,10 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         lists=self.dimension_lists(refresh=True)
         self.sales_department.set(next((f'{d["code"]} - {d["name"]}' for d in lists["departments"] if d["id"]==detail.get("department_id")),"(none)"))
         self.sales_project.set(next((f'{p["code"]} - {p["name"]}' for p in lists["projects"] if p["id"]==detail.get("project_id")),"(none)"))
+        self.sales_treatment.set(next((k for k,v in SALE_TREATMENTS.items() if v==(detail.get("vat_treatment") or "standard")),"Taxable 11%"))
         self.sales_amount_paid.set(str(detail.get("amount_paid") or 0)); self.sales_due_date.set(safe_display_date(detail.get("due_date")) if detail.get("due_date") else "")
         for line in items or [{"description":"Invoice total","quantity":1,"unit_price":float(detail["subtotal"] or 0),"deductible_subtotal":float(detail.get("deductible_subtotal") or detail["subtotal"] or 0),"vat":float(detail["vat"] or 0),"vat_rate":11}]:
-            item={"description":line["description"],"quantity":float(line["quantity"]),"unit_price":float(line["unit_price"]),"deductible_subtotal":float(line.get("deductible_subtotal") or line.get("subtotal") or 0),
+            item={"item_code":line.get("item_code") or "","description":line["description"],"quantity":float(line["quantity"]),"unit_price":float(line["unit_price"]),"deductible_subtotal":float(line.get("deductible_subtotal") or line.get("subtotal") or 0),
                   "non_deductible_subtotal":float(line.get("non_deductible_subtotal") or 0),"vat_rate":float(line["vat_rate"]),"vat":float(line["vat"]),"_taxable_typed":True,"_vat_typed":True}
             self.add_sales_item(item)
         status={"posted":"POSTED","review":"DRAFT"}.get(detail.get("status"),str(detail.get("status")).upper())
@@ -1069,7 +1117,8 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
                  "expense_account":self.sales_expense_account.get().split(" - ",1)[0].strip() or "713100000",
                  "due_date":self.sales_due_date.get().strip(),"payment_method":self.sales_payment_method.get(),"amount_paid":self.sales_amount_paid.get().strip().replace(",","") or "0",
                  "branch":self.sales_branch.get(),"status":"posted" if post else "review","source_file":"Sales Invoice","source_row":None,
-                 "department":self.dimension_code(self.sales_department.get()),"project":self.dimension_code(self.sales_project.get())}
+                 "department":self.dimension_code(self.sales_department.get()),"project":self.dimension_code(self.sales_project.get()),
+                 "vat_treatment":SALE_TREATMENTS.get(self.sales_treatment.get(),"standard")}
         try:
             invoice["invoice_date"]=formatted_user_date(invoice["invoice_date"])
             if invoice["due_date"]: invoice["due_date"]=formatted_user_date(invoice["due_date"])

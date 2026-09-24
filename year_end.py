@@ -76,7 +76,14 @@ def remove_closing(database, year, connection=None):
 
 
 def close_year(database, year, user_id):
-    year = int(year); preview = closing_preview(database, year); results = {}; vouchers = []
+    year = int(year); results = {}; vouchers = []
+    import inventory
+    with database.connect() as db:
+        existing = db.execute("SELECT status FROM fiscal_years WHERE year=?", (year,)).fetchone()
+    if not (existing and existing["status"] == "closed"):
+        with database.connect() as db: has_stock = db.execute("SELECT 1 FROM stock_documents LIMIT 1").fetchone()
+        if has_stock: inventory.post_stock_variation(database, year, user_id)  # book the closing stock before closing 6 & 7
+    preview = closing_preview(database, year)
     with database.connect() as db:
         existing = db.execute("SELECT status FROM fiscal_years WHERE year=?", (year,)).fetchone()
         if existing and existing["status"] == "closed": raise ValueError(f"Fiscal year {year} is already closed. Reopen it first to close it again.")

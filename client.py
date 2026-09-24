@@ -174,15 +174,18 @@ class ApiClient:
     def payroll_report(self,report,period_type,year,index=1,group="both",include_drafts=False):
         query=urlencode({"report":report,"period_type":period_type,"year":year,"index":index,"group":group,"include_drafts":"true" if include_drafts else "false"})
         return self.request("GET",f"/api/payroll/reports?{query}")
-    def vat_return(self,year,quarter,currency=None,include_review=False,credit_brought_forward=None):
+    def vat_return(self,year,quarter,currency=None,include_review=False,credit_brought_forward=None,refund_requested=None):
         query=urlencode({k:v for k,v in {"year":year,"quarter":quarter,"currency":currency,"include_review":"true" if include_review else "false",
-            "credit_brought_forward":credit_brought_forward}.items() if v not in (None,"")})
+            "credit_brought_forward":credit_brought_forward,"refund_requested":refund_requested}.items() if v not in (None,"")})
         return self.request("GET",f"/api/vat-return?{query}")
     def vat_returns(self): return self.request("GET","/api/vat-returns")["items"]
     def add_vat_adjustment(self,item): return self.request("POST","/api/vat-return/adjustments",item)
     def delete_vat_adjustment(self,adjustment_id): return self.request("DELETE",f"/api/vat-return/adjustments/{adjustment_id}")
-    def save_vat_return(self,year,quarter,credit_brought_forward=None):
-        return self.request("POST","/api/vat-return/save",{"year":year,"quarter":quarter,"credit_brought_forward":credit_brought_forward})
+    def save_vat_return(self,year,quarter,credit_brought_forward=None,refund_requested=None):
+        return self.request("POST","/api/vat-return/save",{"year":year,"quarter":quarter,"credit_brought_forward":credit_brought_forward,"refund_requested":refund_requested})
+    def save_vat_ratio(self,year,ratio): return self.request("POST","/api/vat-ratio",{"year":year,"ratio":ratio})["ratio"]
+    def set_vat_classification(self,source,document_id,vat_treatment=None,vat_use=None):
+        return self.request("POST","/api/vat-classification",{"source":source,"id":document_id,"vat_treatment":vat_treatment,"vat_use":vat_use})
     def reopen_vat_return(self,year,quarter): return self.request("POST","/api/vat-return/reopen",{"year":year,"quarter":quarter})
     def set_vat_recoverable(self,source,document_id,recoverable):
         return self.request("POST","/api/vat-recoverable",{"source":source,"id":document_id,"recoverable":bool(recoverable)})
@@ -215,4 +218,17 @@ class ApiClient:
     def landed_costs(self,purchase_id): return self.request("GET",f"/api/invoices/{purchase_id}/landed-costs")["items"]
     def closing_preview(self,year): return self.request("GET",f"/api/fiscal-years/closing-preview?{urlencode({'year':year})}")
     def apply_lebanese_payroll_rules(self): return self.request("POST","/api/payroll/apply-lebanese-rules",{})["items"]
+    def inventory_items(self,date=None): return self.request("GET","/api/inventory/items"+(f"?{urlencode({'date':date})}" if date else ""))["items"]
+    def save_inventory_item(self,item): return self.request("POST","/api/inventory/items",item)["item"]
+    def warehouses(self): return self.request("GET","/api/inventory/warehouses")["items"]
+    def save_warehouse(self,item): return self.request("POST","/api/inventory/warehouses",item)["item"]
+    def inventory_settings(self): return self.request("GET","/api/inventory/settings")
+    def save_inventory_settings(self,item): return self.request("POST","/api/inventory/settings",item)
+    def stock_documents(self): return self.request("GET","/api/inventory/documents")["items"]
+    def stock_document(self,document_id): return self.request("GET",f"/api/inventory/documents/{document_id}")
+    def save_stock_document(self,header,lines,document_id=None): return self.request("POST","/api/inventory/documents",{"header":header,"lines":lines,"id":document_id})
+    def delete_stock_document(self,document_id): return self.request("DELETE",f"/api/inventory/documents/{document_id}")
+    def next_stock_number(self,doc_type,date): return self.request("GET","/api/inventory/next-number?"+urlencode({"type":doc_type,"date":date}))["number"]
+    def inventory_report(self,report,options): return self.request("GET","/api/inventory/report?"+urlencode({"report":report,"options":json.dumps(options)}))
+    def post_stock_variation(self,year): return self.request("POST","/api/inventory/stock-variation",{"year":year})
 

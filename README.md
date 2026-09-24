@@ -130,3 +130,43 @@ The salary tax method is unchanged: transport and schooling are included in taxa
 3. When it finishes, download the **SaberAccountingSetup** artifact and run `SaberAccountingSetup.exe`.
 
 One installer only: no Python, no manual server. The data service starts automatically inside the app, and company data stays in the user's `SaberAccounting` folder across upgrades. First sign-in on a new computer: `admin` / `admin` (change it in Security > Users).
+
+
+---
+
+# Version 2.0.0 - complete release
+
+## Modules
+| Tab | What it does |
+|---|---|
+| Sales Invoice | Automatic number, editable lines (Item, description, qty, price, VAT), VAT treatment (taxable / zero-rated / exempt / out of scope), New / Save / Save & Post, reopen and edit |
+| Journal Voucher | BRAINS-style voucher: multi-currency lines with LBP and USD amounts and rates, due date, reference, department, project, navigation |
+| Import | Excel or PDF invoices as Purchases, Sales, Expenses or Assets. PDFs are read automatically and attached. Adds to existing data (replace is optional) |
+| Customers / Suppliers | Account number first; type 4 digits and the full number fills in |
+| Payment & Receipt | Customer receipts (RV-) and supplier payments (PV-) on the page, with balance, edit and delete |
+| Purchases & Expenses | Purchases with PDF, cost on purchase (customs, freight, insurance, import VAT - manual, Excel or PDF), VAT use; expenses with PDF, Excel import, New / Edit / Delete / Search |
+| Inventory | Items, warehouses, stock documents (opening, receipt, issue, adjustments, transfer), weighted average or FIFO, reports, stock variation |
+| Payroll | Lebanese rules 2024-2026, R5 / R6 / R10 reports |
+| Quarterly VAT | Lebanese periodic declaration with the partial deduction right |
+| Trial Balance / Statement | Balance des Comptes options (BRAINS) |
+| Profit & Loss | Fiscal-year dates, closing 6 & 7 as a Journal Voucher, automatic opening of the next year |
+| Financial Reports | Ledger, balance sheet, cash flow, aging, comparative P&L, budget |
+| Security / Backup / Rates | Users with 1-year validity and permissions, departments, projects, backups, exchange rates |
+
+## Inventory (Lebanese periodic method)
+- Purchases stay in 601. Stock quantities and costs come from the stock documents.
+- Costing: weighted average (default) or FIFO. Stock can never go negative in a warehouse.
+- A Sales Invoice line with an Item code issues the stock automatically (Stock Issue linked to the invoice; deleting or cancelling the invoice removes it).
+- Reports: Stock Valuation (at any date, by warehouse, at cost and at sales price), Stock Card, Stock Movements, Sales Margin (COGS), Reorder, Slow-moving stock. Excel, PDF and print.
+- Year end: the Stock Variation voucher (type 06) cancels account 37 against 6051 and books the closing stock (Dr 37 / Cr 6052). It is posted automatically when the year is closed, and the closing stock becomes the Opening Stock of the next year.
+
+## Year-end order
+1. Enter the last documents of the year and check the stock (Inventory > Reports > Stock Valuation at 31-12).
+2. Profit & Loss > Preview Closing 6&7.
+3. Close the year: stock variation, closing 6 & 7 (result to 121 / 125), and the opening of the next year (balances and stock) are made automatically.
+4. "Delete Closing & Reopen Year" undoes everything if a correction is needed.
+
+## Points to confirm with the accountant
+- Employer NSSF sickness & maternity rate (8% per PwC; one source says 11%).
+- Exact start dates of Jan-Feb 2024 ceilings and the 28M minimum wage.
+- VAT declaration box numbers against the official MoF form; rounding of the deduction ratio.

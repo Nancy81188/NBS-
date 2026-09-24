@@ -149,11 +149,12 @@ class FinalFeaturesMixin:
         self.pr_tree = self.report_viewer(page)
         self.payroll_report_result = None
 
-    def report_viewer(self, parent):
+    def report_viewer(self, parent, widths=None):
         frame = tk.Frame(parent, bg=LIGHT); frame.pack(fill="both", expand=True, padx=10, pady=8)
         columns = [f"c{i}" for i in range(20)]
         tree = ttk.Treeview(frame, columns=columns, show="", selectmode="browse")
-        for index, column in enumerate(columns): tree.column(column, width=190 if index == 1 else 115, anchor="w", stretch=False)
+        widths = list(widths or []) + [None] * 20
+        for index, column in enumerate(columns): tree.column(column, width=widths[index] or (190 if index == 1 else 115), anchor="w", stretch=False)
         tree.tag_configure("section", background=NAVY, foreground="white", font=("Segoe UI", 9, "bold"))
         tree.tag_configure("header", background="#dfe6ee", foreground=NAVY, font=("Segoe UI", 8, "bold"))
         tree.tag_configure("total", background="#e8edf2", font=("Segoe UI", 9, "bold"))
@@ -166,7 +167,12 @@ class FinalFeaturesMixin:
     def show_sections(self, tree, sections):
         tree.delete(*tree.get_children())
         for section in sections:
-            tree.insert("", "end", values=[section["heading"]], tags=("section",))
+            # A heading is longer than one column: spread it over the first columns.
+            text = section["heading"]; parts = []
+            for index in range(20):
+                if not text: break
+                size = max(4, int(int(tree.column(f"c{index}", "width")) / 8.6)); parts.append(text[:size]); text = text[size:]
+            tree.insert("", "end", values=parts, tags=("section",))
             tree.insert("", "end", values=section["headers"], tags=("header",))
             totals = set(section.get("total_rows") or [])
             for index, row in enumerate(section["rows"]):
@@ -254,9 +260,13 @@ class FinalFeaturesMixin:
         tk.Label(controls, text="Currency", bg=LIGHT).pack(side="left", padx=(6, 0))
         ttk.Combobox(controls, textvariable=self.vat_currency, values=["All Currencies", "USD", "EUR", "LBP", "AED"], state="readonly", width=13).pack(side="left", padx=4)
         tk.Checkbutton(controls, text="Include Review documents", variable=self.vat_include_review, bg=LIGHT).pack(side="left", padx=6)
-        tk.Label(controls, text="Credit B/F (LBP, optional)", bg=LIGHT).pack(side="left", padx=(6, 0))
-        tk.Entry(controls, textvariable=self.vat_credit_override, width=14).pack(side="left", padx=4)
         tk.Button(controls, text="Generate", command=self.load_vat_return, bg=GOLD, fg=NAVY, border=0, padx=16, pady=6, font=("Segoe UI", 9, "bold")).pack(side="left", padx=4)
+        law = tk.Frame(page, bg=LIGHT); law.pack(fill="x", padx=10, pady=(0, 4))
+        self.vat_ratio = tk.StringVar(); self.vat_refund = tk.StringVar()
+        tk.Label(law, text="Credit B/F (LBP, optional)", bg=LIGHT).pack(side="left"); tk.Entry(law, textvariable=self.vat_credit_override, width=13).pack(side="left", padx=(4, 12))
+        tk.Label(law, text="Provisional deduction % for the year (Art. 31)", bg=LIGHT).pack(side="left"); tk.Entry(law, textvariable=self.vat_ratio, width=7).pack(side="left", padx=4)
+        self.action_button(law, "Save %", self.save_vat_ratio).pack(side="left", padx=(0, 12))
+        tk.Label(law, text="Refund requested (LBP, Art. 30)", bg=LIGHT).pack(side="left"); tk.Entry(law, textvariable=self.vat_refund, width=13).pack(side="left", padx=4)
         actions = tk.Frame(page, bg=LIGHT); actions.pack(fill="x", padx=10)
         self.action_button(actions, "Save Return (lock quarter)", self.save_vat_return).pack(side="left", padx=3)
         if (self.current_user or {}).get("role") == "admin":
@@ -269,7 +279,7 @@ class FinalFeaturesMixin:
         nested = ttk.Notebook(page); nested.pack(fill="both", expand=True, padx=10, pady=8)
         summary = tk.Frame(nested, bg=LIGHT); documents = tk.Frame(nested, bg=LIGHT); adjustments = tk.Frame(nested, bg=LIGHT); history = tk.Frame(nested, bg=LIGHT)
         nested.add(summary, text="VAT Return"); nested.add(documents, text="Supporting Documents"); nested.add(adjustments, text="Manual Adjustments"); nested.add(history, text="Saved Returns")
-        self.vat_summary_tree = self.report_viewer(summary)
+        self.vat_summary_tree = self.report_viewer(summary, [60, 470, 140, 140, 150])
         self.vat_documents_tree = self.table(documents, [("date", "Date", 90), ("number", "Document", 120), ("party", "Customer / Supplier", 200), ("category", "Category", 140),
             ("deductible", "Deductible", 80), ("currency", "Currency", 70), ("base", "Base", 110), ("vat", "VAT", 100), ("rate", "LBP Rate", 90), ("vat_lbp", "VAT (LBP)", 120), ("status", "Status", 75)])
         form = tk.Frame(adjustments, bg=LIGHT); form.pack(fill="x", padx=10, pady=8)
@@ -295,23 +305,28 @@ class FinalFeaturesMixin:
         if credit is not None:
             try: float(credit)
             except ValueError: raise ValueError("Credit brought forward must be a number in LBP, or left empty")
+        self._vat_refund_value = self.vat_refund.get().strip().replace(",", "") or None
+        if self._vat_refund_value is not None:
+            try: float(self._vat_refund_value)
+            except ValueError: raise ValueError("Refund requested must be a number in LBP, or left empty")
         return year, quarter, currency, credit
 
     def load_vat_return(self):
         if not hasattr(self, "vat_summary_tree"): return
         try:
             year, quarter, currency, credit = self.vat_parameters()
-            result = self.client.vat_return(year, quarter, currency, self.vat_include_review.get(), credit)
+            result = self.client.vat_return(year, quarter, currency, self.vat_include_review.get(), credit, self._vat_refund_value)
             history = self.client.vat_returns()
         except Exception as exc: return messagebox.showerror("Quarterly VAT", str(exc))
         self.vat_return_result = result
         title, meta, sections = vat_rules.export_sections(result)
-        self.show_sections(self.vat_summary_tree, sections[:-2] if result["adjustments"] else sections[:-1])
+        self.show_sections(self.vat_summary_tree, [s for s in sections if s["heading"] not in ("Supporting documents", "Manual adjustments")])
         payable = result["payable_lbp"]; credit_cf = result["credit_carried_forward_lbp"]
         outcome = f"VAT PAYABLE: {payable:,.0f} LBP" if payable else f"CREDIT CARRIED FORWARD: {credit_cf:,.0f} LBP" if credit_cf else "NIL RETURN: 0 LBP"
-        self.vat_headline.config(text=f"Q{quarter} {year}  |  {_display(result['date_from'])} to {_display(result['date_to'])}  |  {outcome}  |  Status: {result['status'].title()}",
+        if result.get("provisional_ratio") is not None and not self.vat_ratio.get().strip(): self.vat_ratio.set(f'{float(result["provisional_ratio"]) * 100:g}')
+        self.vat_headline.config(text=f"Q{quarter} {year}  |  {outcome}  |  Deduction {float(result.get('deduction_ratio', 1)) * 100:.2f}%  |  Due {_display(result.get('due_date'))}  |  {result['status'].title()}",
                                  fg=RED if result["changed_since_saved"] else NAVY)
-        notes = [f"Credit brought forward: {result['credit_brought_forward_lbp']:,.0f} LBP ({result['credit_source']})"]
+        notes = [f"Credit brought forward: {result['credit_brought_forward_lbp']:,.0f} LBP ({result['credit_source']})", f"Deduction ratio: {result.get('ratio_source', '')}"] + [f"Check: {w}" for w in result.get("warnings", [])]
         if result["review_excluded"]: notes.append(f"{result['review_excluded']} document(s) in Review status are not included")
         if result["skipped"]: notes.append(f"{len(result['skipped'])} document(s) have an unreadable date: {', '.join(map(str, result['skipped'][:5]))}")
         if result["changed_since_saved"]: notes.append("Documents changed after this return was saved - review and save again")
@@ -319,7 +334,7 @@ class FinalFeaturesMixin:
         self.vat_note.config(text="   |   ".join(notes))
         self.vat_documents_tree.delete(*self.vat_documents_tree.get_children())
         for d in result["documents"]:
-            self.vat_documents_tree.insert("", "end", values=(_display(d["date"]), d["number"], d["party"], vat_rules.CATEGORIES[d["category"]], "Yes" if d["recoverable"] else "No",
+            self.vat_documents_tree.insert("", "end", values=(_display(d["date"]), d["number"], d["party"], f'{vat_rules.CATEGORIES[d["category"]]} ({d.get("treatment", "standard").replace("_", " ")})', d.get("deductible_share") or ("Yes" if d["recoverable"] else "No"),
                 d["currency"], _fmt(d["base"]), _fmt(d["vat"]), _fmt(d["lbp_rate"]), _fmt(d["vat_lbp"]), d["status"]))
         self.vat_adjustment_rows = {str(a["id"]): a for a in result["adjustments"]}
         self.vat_adjustments_tree.delete(*self.vat_adjustments_tree.get_children())
@@ -356,10 +371,17 @@ class FinalFeaturesMixin:
         except Exception as exc: return messagebox.showerror("Quarterly VAT", str(exc))
         if not messagebox.askyesno("Save VAT Return", f"Save the Q{quarter} {year} return for all currencies? Adjustments for this quarter will be locked, "
                                    "and the credit carried forward will be used by the next quarter."): return
-        try: result = self.client.save_vat_return(year, quarter, credit)
+        try: result = self.client.save_vat_return(year, quarter, credit, self._vat_refund_value)
         except Exception as exc: return messagebox.showerror("Quarterly VAT", str(exc))
         self.vat_currency.set("All Currencies"); self.load_vat_return()
         messagebox.showinfo("Quarterly VAT", f"Q{quarter} {year} saved. Payable: {result['payable_lbp']:,.0f} LBP   Credit carried forward: {result['credit_carried_forward_lbp']:,.0f} LBP")
+
+    def save_vat_ratio(self):
+        try: year = int(self.vat_year.get().strip()); saved = self.client.save_vat_ratio(year, self.vat_ratio.get().strip())
+        except Exception as exc: return messagebox.showerror("Deduction ratio", str(exc))
+        messagebox.showinfo("Deduction ratio", f"Provisional deduction ratio for {year}: {float(saved) * 100:.2f}%. Q4 always uses the final annual ratio." if saved is not None
+                            else f"No provisional ratio for {year}: Q1-Q3 use the year-to-date turnover.")
+        self.load_vat_return()
 
     def reopen_vat_return(self):
         try: year, quarter, _currency, _credit = self.vat_parameters()
