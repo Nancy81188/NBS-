@@ -98,7 +98,7 @@ class CompanyManager:
         previous=max((y for y in company["years"] if int(y["year"])<year),key=lambda y:int(y["year"]),default=None)
         if not previous: raise ValueError("Create fiscal years in chronological order")
         source=Database(previous["database"])
-        path=self.root/company_id/f"{year}.db"; target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
+        path=self.root/company_id/f"{year}.db"; path.parent.mkdir(parents=True,exist_ok=True); target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
         company["years"].append({"year":year,"database":str(path.resolve()),"status":"open"}); company["years"].sort(key=lambda y:int(y["year"]))
         self._write(data); return company
 
@@ -149,7 +149,7 @@ class CompanyManager:
                 ids=[row["id"] for row in db.execute("SELECT id FROM journal_entries WHERE source_type='opening' AND entry_number LIKE ?",(f"OPEN-{next_year}-%",))]
                 for entry_id in ids: db.execute("DELETE FROM journal_entries WHERE id=?",(entry_id,))
         else:
-            path=self.root/company_id/f"{next_year}.db"
+            path=self.root/company_id/f"{next_year}.db"; path.parent.mkdir(parents=True,exist_ok=True)
             target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
         opening_vouchers=self._opening_balances(source,target,next_year,user_id)
         if not next_record: company["years"].append({"year":next_year,"database":str(path.resolve()),"status":"open"})
@@ -169,20 +169,5 @@ class CompanyManager:
                 dst.executemany(f"INSERT INTO {table}({','.join(columns)}) VALUES({placeholders})",[tuple(row[col] for col in columns) for row in rows])
 
     def _opening_balances(self,source,target,year,user_id):
-        rows=source.trial_balance(to_date=f"{year-1}-12-31")
-        by_currency={}
-        for row in rows:
-            balance=float(row.get("balance") or 0)
-            if abs(balance)>=0.005: by_currency.setdefault(row["currency"],[]).append((row["code"],balance))
-        vouchers=[]
-        with target.connect() as db:
-            branch=db.execute("SELECT id FROM branches ORDER BY id LIMIT 1").fetchone()
-            for currency,lines in by_currency.items():
-                number=f"OPEN-{year}-{currency}"
-                entry=db.execute("INSERT INTO journal_entries(entry_number,entry_date,description,source_type,currency,created_by,created_at,branch_id) VALUES(?,?,?,?,?,?,?,?)",
-                    (number,f"01-01-{year}",f"Opening balances {year}","opening",currency,user_id,utcnow(),branch["id"] if branch else None))
-                for code,balance in lines:
-                    account=db.execute("SELECT id FROM accounts WHERE code=?",(code,)).fetchone()
-                    if account: db.execute("INSERT INTO journal_lines(entry_id,account_id,debit,credit) VALUES(?,?,?,?)",(entry.lastrowid,account["id"],str(max(balance,0)),str(max(-balance,0))))
-                vouchers.append(number)
-        return vouchers
+        import year_end
+        return year_end.post_opening(source,target,year,user_id)

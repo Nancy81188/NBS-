@@ -109,6 +109,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/invoices/") and path.endswith("/landed-costs"):
             try: return self._json(200,{"items":self.db.landed_costs(int(path.split("/")[-2]))})
             except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path == "/api/fiscal-years/closing-preview":
+            try:
+                import year_end
+                data=year_end.closing_preview(self.db,int(self._query(parsed,"year")))
+                return self._json(200,{c:{"lines":[[code,float(a),float(l),float(u),name] for code,a,l,u,name in v["lines"]],"net_result":float(v["net_result"])} for c,v in data.items()})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/departments": return self._json(200,{"items":self.db.list_departments()})
         if path == "/api/projects": return self._json(200,{"items":self.db.list_projects()})
         if path == "/api/budgets":
@@ -411,6 +417,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             except KeyError: return self._json(404,{"error":"Payroll record not found"})
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,{"payroll":result})
+        if path == "/api/payroll/apply-lebanese-rules":
+            if user["role"]!="admin": return self._json(403,{"error":"Administrator permission required"})
+            try: return self._json(200,{"items":self.db.apply_lebanese_payroll_rules(user["id"])})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/payroll/settings":
             if user["role"]!="admin": return self._json(403,{"error":"Administrator permission required"})
             try: result=self.db.save_payroll_settings(body,user["id"])

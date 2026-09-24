@@ -321,6 +321,13 @@ class Database:
             if "retro_from" not in payroll_columns: db.execute("ALTER TABLE payroll_records ADD COLUMN retro_from TEXT")
             if "retro_to" not in payroll_columns: db.execute("ALTER TABLE payroll_records ADD COLUMN retro_to TEXT")
             payroll_setting_columns={row["name"] for row in db.execute("PRAGMA table_info(payroll_settings)")}
+            for column,default in (("transport_daily_exempt","450000"),("default_transport_days","26"),("schooling_annual_exempt","6000000"),("schooling_max_children","3"),
+                                   ("tax_rounding","0"),("minimum_wage","0"),("max_children_deduction","5"),("family_allowance_spouse","0"),("family_allowance_child","0"),
+                                   ("family_allowance_cap","0"),("family_allowance_max_children","5")):
+                if column not in payroll_setting_columns: db.execute(f"ALTER TABLE payroll_settings ADD COLUMN {column} TEXT NOT NULL DEFAULT '{default}'")
+            payroll_record_columns={row["name"] for row in db.execute("PRAGMA table_info(payroll_records)")}
+            for column in ("transport_days","exempt_transport","exempt_schooling","family_allowance","regular_tax","one_off_tax","compliance_notes"):
+                if column not in payroll_record_columns: db.execute(f"ALTER TABLE payroll_records ADD COLUMN {column} TEXT")
             if "employee_account_map" not in payroll_setting_columns: db.execute("ALTER TABLE payroll_settings ADD COLUMN employee_account_map TEXT NOT NULL DEFAULT '{}'")
             if "manager_account_map" not in payroll_setting_columns: db.execute("ALTER TABLE payroll_settings ADD COLUMN manager_account_map TEXT NOT NULL DEFAULT '{}'")
             if "retro_tax" not in payroll_columns: db.execute("ALTER TABLE payroll_records ADD COLUMN retro_tax TEXT NOT NULL DEFAULT '0'")
@@ -1290,7 +1297,8 @@ class Database:
                 WHERE l.entity='invoice' AND l.entity_id=? ORDER BY l.id DESC""", (invoice_id,))]
 
     def profit_and_loss(self, from_date=None, to_date=None, currency=None):
-        conditions = ["a.type IN ('income','expense')"]
+        # The year-end closing brings 6 & 7 to zero; the P&L must show the year before closing.
+        conditions = ["a.type IN ('income','expense')", "NOT (e.source_type='year_close' OR (e.voucher_type='05' AND e.description LIKE 'CLOSING 6&7 - %'))"]
         parameters = []
         normalized_date = """CASE WHEN e.entry_date GLOB '??-??-????'
             THEN substr(e.entry_date,7,4)||'-'||substr(e.entry_date,4,2)||'-'||substr(e.entry_date,1,2)
@@ -1308,61 +1316,18 @@ class Database:
         return rows
 
     def close_fiscal_year(self, year, user_id):
-        year = int(year)
-        start, end = f"{year}-01-01", f"{year}-12-31"
-        with self.connect() as db:
-            existing = db.execute("SELECT * FROM fiscal_years WHERE year=?", (year,)).fetchone()
-            if existing and existing["status"] == "closed":
-                raise ValueError(f"Fiscal year {year} is already closed")
-            pnl_rows = self.profit_and_loss(start, end)
-            by_currency = {}
-            for row in pnl_rows:
-                balance = Decimal(str(row["debit"] or 0)) - Decimal(str(row["credit"] or 0))
-                if balance:
-                    by_currency.setdefault(row["currency"], []).append((row["code"], balance))
-            results = {}
-            for currency, balances in by_currency.items():
-                entry = db.execute("""INSERT INTO journal_entries(entry_number,entry_date,description,source_type,source_id,currency,created_by,created_at)
-                    VALUES(?,?,?,?,?,?,?,?)""", (f"CLOSE-{year}-{currency}", end, f"Fiscal year {year} closing",
-                    "year_close", year, currency, user_id, utcnow()))
-                close_difference = Decimal("0")
-                for code, balance in balances:
-                    debit = -balance if balance < 0 else Decimal("0")
-                    credit = balance if balance > 0 else Decimal("0")
-                    close_difference += debit - credit
-                    db.execute("INSERT INTO journal_lines(entry_id,account_id,debit,credit) VALUES(?,?,?,?)",
-                        (entry.lastrowid,self._account_id(db,code),str(debit),str(credit)))
-                if close_difference > 0:
-                    result_code, debit, credit = "121", Decimal("0"), close_difference
-                else:
-                    result_code, debit, credit = "125", -close_difference, Decimal("0")
-                db.execute("INSERT INTO journal_lines(entry_id,account_id,debit,credit) VALUES(?,?,?,?)",
-                    (entry.lastrowid,self._account_id(db,result_code),str(debit),str(credit)))
-                results[currency] = float(credit - debit)
-            db.execute("""INSERT INTO fiscal_years(year,status,opened_at,closed_at,closed_by,details)
-                VALUES(?,'closed',?,?,?,?) ON CONFLICT(year) DO UPDATE SET status='closed',closed_at=excluded.closed_at,
-                closed_by=excluded.closed_by,details=excluded.details""",
-                (year,f"{year}-01-01T00:00:00",utcnow(),user_id,json.dumps({"net_results":results})))
-            db.execute("INSERT OR IGNORE INTO fiscal_years(year,status,opened_at) VALUES(?,'open',?)", (year+1,utcnow()))
-            db.execute("INSERT INTO audit_log(user_id,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?)",
-                (user_id,"close","fiscal_year",year,json.dumps({"next_year":year+1,"net_results":results}),utcnow()))
-        return {"closed_year":year,"opened_year":year+1,"net_results":results}
+        """Close classes 6 & 7 with a 'CLOSING 6&7' Journal Voucher (type 05) per currency."""
+        import year_end
+        return year_end.close_year(self, year, user_id)
 
     def list_fiscal_years(self):
         with self.connect() as db:
             return [dict(row) for row in db.execute("SELECT * FROM fiscal_years ORDER BY year DESC")]
 
     def reopen_fiscal_year(self,year,user_id):
-        year=int(year)
-        with self.connect() as db:
-            row=db.execute("SELECT status FROM fiscal_years WHERE year=?",(year,)).fetchone()
-            closing_ids=[item["id"] for item in db.execute("SELECT id FROM journal_entries WHERE source_type='year_close' AND entry_number LIKE ?",(f"CLOSE-{year}-%",))]
-            for entry_id in closing_ids: db.execute("DELETE FROM journal_entries WHERE id=?",(entry_id,))
-            db.execute("""INSERT INTO fiscal_years(year,status,opened_at) VALUES(?,'open',?)
-                ON CONFLICT(year) DO UPDATE SET status='open',closed_at=NULL,closed_by=NULL,details=NULL""",(year,f"{year}-01-01T00:00:00"))
-            db.execute("INSERT INTO audit_log(user_id,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?)",
-                (user_id,"reopen","fiscal_year",year,json.dumps({"removed_closing_entries":len(closing_ids)}),utcnow()))
-        return {"year":year,"status":"open","removed_closing_entries":len(closing_ids)}
+        """Delete every closing of this year (old and new style) and open it again."""
+        import year_end
+        return year_end.reopen_year(self, year, user_id)
 
     def list_parties(self):
         with self.connect() as db:
@@ -2162,7 +2127,25 @@ class Database:
             for key in ("employee_account_map","manager_account_map"):
                 mapping={**self.default_payroll_account_map(),**(item.get(key) or {})}
                 db.execute(f"UPDATE payroll_settings SET {key}=? WHERE date_from=?",(json.dumps(mapping),date_from))
+            for key in ("transport_daily_exempt","default_transport_days","schooling_annual_exempt","schooling_max_children","tax_rounding","minimum_wage","max_children_deduction","family_allowance_spouse","family_allowance_child","family_allowance_cap","family_allowance_max_children"):
+                if item.get(key) not in (None,""):
+                    try: value=str(Decimal(str(item[key]).replace(",","")))
+                    except Exception as exc: raise ValueError(f"{key.replace('_',' ').title()} must be a number") from exc
+                    db.execute(f"UPDATE payroll_settings SET {key}=? WHERE date_from=?",(value,date_from))
         return self.payroll_settings_for(date_from)
+
+    def apply_lebanese_payroll_rules(self,user_id):
+        """Replace the effective-dated payroll settings with the official Lebanese periods (2024 onward), keeping the posting accounts."""
+        import lebanese_payroll
+        current=self.payroll_settings_for(None)
+        maps={k:current.get(k) for k in ("employee_account_map","manager_account_map")}
+        accounts={k:current.get(k) for k in ("salary_account","salary_payable_account","payroll_tax_account","nssf_payable_account") if current.get(k)}
+        with self.connect() as db: db.execute("DELETE FROM payroll_settings")
+        for period in lebanese_payroll.official_periods():
+            self.save_payroll_settings({**period,**accounts,**maps},user_id)
+        with self.connect() as db:
+            db.execute("INSERT INTO audit_log(user_id,action,entity,details,created_at) VALUES(?,?,?,?,?)",(user_id,"apply","payroll_rules",json.dumps({"periods":len(lebanese_payroll.PERIODS)}),utcnow()))
+        return self.list_payroll_settings()
 
     @staticmethod
     def _progressive_tax(annual_taxable,brackets):
@@ -2176,47 +2159,110 @@ class Database:
         return tax
 
     def calculate_payroll(self,item):
+        """Monthly payroll under the Lebanese rules effective on the payroll date.
+
+        - Recurring pay (salary, overtime, commission and the taxable part of transport / schooling) is taxed
+          on the annualised basis: tax(12 x monthly - family deductions) / 12.
+        - Bonus and 13th salary are one-off income: tax(annual regular + one-off) - tax(annual regular).
+        - Retroactive salary is taxed as if paid in its own months (Retro From / To), and its NSSF uses the
+          ceiling of each of those months.
+        - Transport is exempt up to the daily amount x days worked; schooling up to the annual limit.
+        - NSSF: employee and employer shares on the monthly ceilings of the period; end of service has no ceiling.
+        - Tax is rounded up to the rounding amount (LBP 10,000 from 25-11-2024) and converted to the salary currency."""
         employee_id=int(item.get("employee_id") or 0); period=str(item.get("period_date") or "").strip()
         if not employee_id or not period: raise ValueError("Select an employee and payroll period")
         period=iso_date(period,"Payroll period")
         with self.connect() as db: employee=db.execute("SELECT * FROM employees WHERE id=?",(employee_id,)).fetchone()
         if not employee: raise ValueError("Employee was not found")
-        settings=self.payroll_settings_for(period)
+        settings=self.payroll_settings_for(period); D=Decimal
+        def setting(name,default="0"):
+            try: return D(str(settings.get(name) if settings.get(name) not in (None,"") else default))
+            except Exception: return D(default)
         money={}
         for name in ("salary","transport","overtime","commission","retro_salary","schooling","bonus","thirteenth_month"):
             raw=item.get(name) if item.get(name) not in (None,"") else (employee["base_salary"] if name=="salary" else 0)
-            try: money[name]=Decimal(str(raw).replace(",",""))
+            try: money[name]=D(str(raw).replace(",",""))
             except Exception as exc: raise ValueError(f"{name.replace('_',' ').title()} must be a number") from exc
             if money[name]<0: raise ValueError(f"{name.replace('_',' ').title()} cannot be negative")
-        gross=sum(money.values(),Decimal("0")); currency=employee["currency"]
-        gross_lbp=self._converted_amount(gross,currency,"LBP",period); annual_lbp=gross_lbp*12
-        allowance=Decimal(settings.get("single_allowance","0"))
-        if employee["marital_status"] in ("married","spouse") and not int(employee["spouse_works"] or 0): allowance+=Decimal(settings.get("spouse_allowance","0"))
-        allowance+=Decimal(settings.get("child_allowance","0"))*int(employee["children"] or 0)
-        taxable_lbp=max(Decimal("0"),annual_lbp-allowance)
-        income_tax_lbp=(self._progressive_tax(taxable_lbp,settings.get("tax_brackets",[]))/12).quantize(Decimal("0.01"))
-        # Portion of this month's tax caused by the retroactive salary (same method, retro removed).
-        without_retro_lbp=self._converted_amount(gross-money["retro_salary"],currency,"LBP",period)*12
-        tax_without_retro=(self._progressive_tax(max(Decimal("0"),without_retro_lbp-allowance),settings.get("tax_brackets",[]))/12).quantize(Decimal("0.01"))
-        retro_tax_lbp=max(Decimal("0"),income_tax_lbp-tax_without_retro)
-        retro_tax=self._converted_amount(retro_tax_lbp,"LBP",currency,period).quantize(Decimal("0.01"))
-        income_tax=self._converted_amount(income_tax_lbp,"LBP",currency,period).quantize(Decimal("0.01"))
-        taxable_monthly=self._converted_amount(taxable_lbp/12,"LBP",currency,period).quantize(Decimal("0.01"))
+        currency=employee["currency"]; brackets=settings.get("tax_brackets",[]); notes=[]
+        to_lbp=lambda value,day=period: self._converted_amount(value,currency,"LBP",day)
+        from_lbp=lambda value,day=period: self._converted_amount(value,"LBP",currency,day)
+        try: days=int(D(str(item.get("transport_days") if item.get("transport_days") not in (None,"") else setting("default_transport_days","26"))))
+        except Exception as exc: raise ValueError("Transport days must be a whole number") from exc
+        if days<0 or days>31: raise ValueError("Transport days must be between 0 and 31")
+        exempt_transport_lbp=min(to_lbp(money["transport"]),setting("transport_daily_exempt")*days)
+        children=int(employee["children"] or 0)
+        schooling_limit=setting("schooling_annual_exempt")/12 if min(children,int(setting("schooling_max_children","3")))>0 else D("0")
+        exempt_schooling_lbp=min(to_lbp(money["schooling"]),schooling_limit)
+        taxable_transport_lbp=to_lbp(money["transport"])-exempt_transport_lbp; taxable_schooling_lbp=to_lbp(money["schooling"])-exempt_schooling_lbp
+        if taxable_transport_lbp>0: notes.append(f"Transport above the exempt {int(setting('transport_daily_exempt')):,} LBP x {days} days is taxed")
+        if taxable_schooling_lbp>0: notes.append("Schooling above the exempt annual limit is taxed")
+        allowance=setting("single_allowance")
+        if employee["marital_status"] in ("married","spouse") and not int(employee["spouse_works"] or 0): allowance+=setting("spouse_allowance")
+        allowance+=setting("child_allowance")*min(children,int(setting("max_children_deduction","5")))
+        if children>int(setting("max_children_deduction","5")): notes.append(f"Family deduction limited to {int(setting('max_children_deduction','5'))} children")
+        regular_lbp=to_lbp(money["salary"]+money["overtime"]+money["commission"])+taxable_transport_lbp+taxable_schooling_lbp
+        tax=lambda annual: self._progressive_tax(max(D("0"),annual-allowance),brackets)
+        regular_tax=tax(regular_lbp*12)/12
+        one_off_lbp=to_lbp(money["bonus"]+money["thirteenth_month"])
+        one_off_tax=tax(regular_lbp*12+one_off_lbp)-tax(regular_lbp*12)
+        retro_tax=D("0"); retro_months=[]
+        if money["retro_salary"]:
+            start=iso_date(item.get("retro_from") or period,"Retro From"); end=iso_date(item.get("retro_to") or period,"Retro To")
+            if end<start: raise ValueError("Retro To cannot be before Retro From")
+            y,m=int(start[:4]),int(start[5:7])
+            while (y,m)<=(int(end[:4]),int(end[5:7])):
+                retro_months.append(f"{y}-{m:02d}-28"); m+=1
+                if m>12: y,m=y+1,1
+            share=money["retro_salary"]/len(retro_months)
+            for month in retro_months:
+                month_settings=self.payroll_settings_for(month); month_brackets=month_settings.get("tax_brackets",brackets)
+                monthly=lambda annual: self._progressive_tax(max(D("0"),annual-allowance),month_brackets)/12
+                retro_tax+=monthly((regular_lbp+to_lbp(share,month))*12)-monthly(regular_lbp*12)
+        rounding=setting("tax_rounding")
+        def rounded(value):
+            value=max(D("0"),value)
+            if rounding>0 and value>0: return ((value/rounding).to_integral_value(rounding="ROUND_CEILING"))*rounding
+            return value.quantize(D("0.01"))
+        income_tax_lbp=rounded(regular_tax+one_off_tax+retro_tax)
+        retro_tax_lbp=min(income_tax_lbp,max(D("0"),retro_tax).quantize(D("0.01")))
+        income_tax=from_lbp(income_tax_lbp).quantize(D("0.01")); retro_tax_value=from_lbp(retro_tax_lbp).quantize(D("0.01"))
+        taxable_lbp=max(D("0"),regular_lbp*12-allowance)/12+one_off_lbp
+        # NSSF: salary, overtime, commission, bonus and 13th this month; retroactive salary in its own months.
+        base_lbp=to_lbp(money["salary"]+money["overtime"]+money["commission"]+money["bonus"]+money["thirteenth_month"])
+        def contribution(ceiling_name,rate_name,base,month_settings):
+            limit=D(str(month_settings.get(ceiling_name) or 0)); capped=min(base,limit) if limit>0 else base
+            return capped*D(str(month_settings.get(rate_name) or 0))
+        totals={name:contribution(ceiling,rate,base_lbp,settings) for name,ceiling,rate in (("employee","employee_ceiling","employee_nssf_rate"),("medical","medical_ceiling","medical_rate"),
+                ("family","family_ceiling","family_rate"),("end_service","end_service_ceiling","end_service_rate"))}
+        if money["retro_salary"]:
+            share=money["retro_salary"]/len(retro_months)
+            for month in retro_months:
+                month_settings=self.payroll_settings_for(month); regular_month=to_lbp(money["salary"]+money["overtime"]+money["commission"],month); extra=to_lbp(share,month)
+                for name,ceiling,rate in (("employee","employee_ceiling","employee_nssf_rate"),("medical","medical_ceiling","medical_rate"),("family","family_ceiling","family_rate"),("end_service","end_service_ceiling","end_service_rate")):
+                    totals[name]+=contribution(ceiling,rate,regular_month+extra,month_settings)-contribution(ceiling,rate,regular_month,month_settings)
+        nssf={name:(value.quantize(D("0.01")),from_lbp(value).quantize(D("0.01"))) for name,value in totals.items()}
+        # NSSF family allowances paid with the salary on behalf of the NSSF (not taxable, offset against NSSF dues).
+        allowance_lbp=D("0")
+        if setting("family_allowance_cap")>0 or setting("family_allowance_child")>0:
+            if employee["marital_status"] in ("married","spouse") and not int(employee["spouse_works"] or 0): allowance_lbp+=setting("family_allowance_spouse")
+            allowance_lbp+=setting("family_allowance_child")*min(children,int(setting("family_allowance_max_children","5")))
+            if setting("family_allowance_cap")>0: allowance_lbp=min(allowance_lbp,setting("family_allowance_cap"))
+        family_allowance=from_lbp(allowance_lbp).quantize(D("0.01"))
+        minimum=setting("minimum_wage")
+        if minimum>0 and to_lbp(money["salary"])<minimum: notes.append(f"Salary is below the minimum wage of {int(minimum):,} LBP for this period")
+        if not str(employee["nssf_number"] or "").strip(): notes.append("NSSF number missing in the employee file")
+        if not str(employee["mof_number"] or "").strip(): notes.append("MOF (tax) number missing in the employee file")
+        gross=sum(money.values(),D("0"))
+        net=(gross-income_tax-nssf["employee"][1]+family_allowance).quantize(D("0.01"))
         salary_base=money["salary"]+money["overtime"]+money["commission"]+money["retro_salary"]+money["bonus"]+money["thirteenth_month"]
-        salary_base_lbp=self._converted_amount(salary_base,currency,"LBP",period)
-        def contribution(ceiling,rate):
-            limit=Decimal(str(settings.get(ceiling,"0") or 0)); base=min(salary_base_lbp,limit) if limit>0 else salary_base_lbp
-            amount_lbp=(base*Decimal(settings.get(rate,"0"))).quantize(Decimal("0.01"))
-            return self._converted_amount(amount_lbp,"LBP",currency,period).quantize(Decimal("0.01")),amount_lbp
-        employee_nssf,employee_nssf_lbp=contribution("employee_ceiling","employee_nssf_rate")
-        medical,medical_lbp=contribution("medical_ceiling","medical_rate")
-        family,family_lbp=contribution("family_ceiling","family_rate")
-        end_service,end_service_lbp=contribution("end_service_ceiling","end_service_rate")
-        net=(gross-income_tax-employee_nssf).quantize(Decimal("0.01"))
-        return {**{k:float(v) for k,v in money.items()},"gross_salary":float(gross),"taxable_salary":float(taxable_monthly),"income_tax":float(income_tax),"income_tax_lbp":float(income_tax_lbp),
-            "nssf_base":float(salary_base),"employee_nssf":float(employee_nssf),"employee_nssf_lbp":float(employee_nssf_lbp),"employer_medical":float(medical),
-            "employer_end_service":float(end_service),"employer_family":float(family),"net_salary":float(net),"currency":currency,
-            "retro_tax":float(retro_tax),"retro_tax_lbp":float(retro_tax_lbp),"period_date":period,
+        return {**{k:float(v) for k,v in money.items()},"gross_salary":float(gross),"taxable_salary":float(from_lbp(taxable_lbp).quantize(D("0.01"))),
+            "income_tax":float(income_tax),"income_tax_lbp":float(income_tax_lbp),"nssf_base":float(salary_base),"employee_nssf":float(nssf["employee"][1]),
+            "employee_nssf_lbp":float(nssf["employee"][0]),"employer_medical":float(nssf["medical"][1]),"employer_end_service":float(nssf["end_service"][1]),
+            "employer_family":float(nssf["family"][1]),"net_salary":float(net),"currency":currency,"retro_tax":float(retro_tax_value),"retro_tax_lbp":float(retro_tax_lbp),
+            "regular_tax":float(from_lbp(rounded(regular_tax)).quantize(D("0.01"))),"one_off_tax":float(from_lbp(max(D("0"),one_off_tax)).quantize(D("0.01"))),
+            "transport_days":days,"exempt_transport":float(from_lbp(exempt_transport_lbp).quantize(D("0.01"))),"exempt_schooling":float(from_lbp(exempt_schooling_lbp).quantize(D("0.01"))),
+            "family_allowance":float(family_allowance),"compliance_notes":notes,"period_date":period,
             "settings_period":{"date_from":settings.get("date_from"),"date_to":settings.get("date_to")}}
 
     def list_payroll(self,period_from=None,period_to=None):
@@ -2241,8 +2287,9 @@ class Database:
                 prefix=f"PAY-{period[:7].replace('-','')}-"; row=db.execute("SELECT payroll_number FROM payroll_records WHERE payroll_number LIKE ? ORDER BY payroll_number DESC LIMIT 1",(prefix+"%",)).fetchone()
                 number=f"{prefix}{(int(row['payroll_number'].rsplit('-',1)[-1])+1 if row else 1):06d}"
             fields=("salary","transport","overtime","commission","retro_salary","schooling","bonus","thirteenth_month","gross_salary","taxable_salary","income_tax","income_tax_lbp",
-                "nssf_base","employee_nssf","employer_medical","employer_end_service","employer_family","net_salary","retro_tax")
-            values=[str(calc[field]) for field in fields]
+                "nssf_base","employee_nssf","employer_medical","employer_end_service","employer_family","net_salary","retro_tax",
+                "transport_days","exempt_transport","exempt_schooling","family_allowance","regular_tax","one_off_tax","compliance_notes")
+            values=[json.dumps(calc[field]) if field=="compliance_notes" else str(calc[field]) for field in fields]
             existing=db.execute("SELECT id,status FROM payroll_records WHERE employee_id=? AND period_date=?",(employee_id,period)).fetchone()
             if existing and existing["status"]=="posted": raise ValueError("Posted payroll cannot be changed")
             if existing:
@@ -2284,7 +2331,8 @@ class Database:
             entry_id=db.execute("""INSERT INTO journal_entries(entry_number,entry_date,description,source_type,source_id,currency,branch_id,created_by,created_at)
                 VALUES(?,?,?,?,?,?,?,?,?)""",(number,display_date(record["period_date"]),f'Payroll - {record["full_name"]}',"payroll",record["id"],record["currency"],record["branch_id"],user_id,utcnow())).lastrowid
             lines=[(mapping[key],Decimal(record[key]),Decimal("0")) for key in component_names]
-            lines+=((employer_expense,employer_nssf,Decimal("0")),(payable_account,Decimal("0"),net),(tax_account,Decimal("0"),tax),(nssf_account,Decimal("0"),employee_nssf+employer_nssf))
+            family_allowance=Decimal(str(record["family_allowance"] or 0)) if "family_allowance" in record.keys() else Decimal("0")
+            lines+=((employer_expense,employer_nssf,Decimal("0")),(payable_account,Decimal("0"),net),(tax_account,Decimal("0"),tax),(nssf_account,family_allowance,employee_nssf+employer_nssf))
             for code,debit,credit in lines:
                 if not debit and not credit: continue
                 db.execute("INSERT INTO journal_lines(entry_id,account_id,description,debit,credit) VALUES(?,?,?,?,?)",

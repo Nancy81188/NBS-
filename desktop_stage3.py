@@ -262,7 +262,7 @@ class Stage3Mixin:
         self.load_transactions(); self.new_payment(form); self.load_journal(); self.load_trial()
 
     def load_transactions(self):
-        if hasattr(self, "payment_forms"):
+        if hasattr(self, "payment_forms") and all(f["tree"].winfo_exists() for f in self.payment_forms.values()):
             try: payments = self.client.payments(); parties = self.client.parties()
             except Exception as exc: return messagebox.showerror("Payment & Receipt", str(exc))
             for kind, form in self.payment_forms.items():
@@ -408,7 +408,7 @@ class Stage3Mixin:
 
     def load_purchases(self):
         f = getattr(self, "purchase_form", None)
-        if not f: return
+        if not f or not f["tree"].winfo_exists(): return
         try: parties = self.client.parties()
         except Exception: parties = []
         f["supplier_map"] = {f'{p["name"]} | {p.get("account_number") or ""}': p for p in parties if p["kind"] in ("supplier", "both")}
@@ -617,7 +617,7 @@ class Stage3Mixin:
 
     def load_expenses(self):
         f = getattr(self, "expense_form", None)
-        if not f: return
+        if not f or not f["tree"].winfo_exists(): return
         try: rows = self.client.expenses()
         except Exception: rows = []
         lists = self.dimension_lists(); departments = {d["id"]: d["code"] for d in lists["departments"]}; projects = {p["id"]: p["code"] for p in lists["projects"]}

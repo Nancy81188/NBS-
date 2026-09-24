@@ -142,7 +142,7 @@ def _nssf_section(label, items, employee_label):
 
 
 def _r10_sections(label, items):
-    headers = ["Emp. No.", "Employee Name", "MOF No.", "Months"] + [name for _, name in COMPONENTS] + ["Gross", "Family Deductions", "Taxable", "Income Tax", "of which Retro Tax"]
+    headers = ["Emp. No.", "Employee Name", "MOF No.", "Months"] + [name for _, name in COMPONENTS] + ["Gross", "Deductions & Exemptions", "Taxable", "Income Tax", "of which Retro Tax"]
     fields = [key for key, _ in COMPONENTS] + ["gross_salary", "family_deductions", "taxable_salary", "income_tax", "retro_tax"]
     rows = [[item["row"]["employee_number"], item["row"]["full_name"], item["row"].get("mof_number") or "", len(item["months"])] + [item["totals"][f] for f in fields] for item in items]
     rows.append(["TOTAL", f"{len(items)} {label.lower()}", "", ""] + [_sum(items, f) for f in fields])
@@ -151,11 +151,11 @@ def _r10_sections(label, items):
 
 def _r5_sections(label, items):
     summary = [[name, _sum(items, key)] for key, name in COMPONENTS]
-    summary += [["Total gross salaries and benefits", _sum(items, "gross_salary")], ["Family deductions", _sum(items, "family_deductions")],
+    summary += [["Total gross salaries and benefits", _sum(items, "gross_salary")], ["Family deductions and exempt allowances", _sum(items, "family_deductions")],
         ["Total taxable income", _sum(items, "taxable_salary")], ["Salary tax withheld", _sum(items, "income_tax")],
         ["of which tax on retroactive salary", _sum(items, "retro_tax")], ["Employee NSSF withheld", _sum(items, "employee_nssf")],
         ["Employer NSSF contributions", _sum(items, "employer_total")], ["Number of employees", len(items)]]
-    headers = ["Emp. No.", "Employee Name", "MOF No.", "NSSF No.", "Family Status", "Months", "Gross", "Family Deductions", "Taxable", "Income Tax"]
+    headers = ["Emp. No.", "Employee Name", "MOF No.", "NSSF No.", "Family Status", "Months", "Gross", "Deductions & Exemptions", "Taxable", "Income Tax"]
     fields = ("gross_salary", "family_deductions", "taxable_salary", "income_tax")
     rows = [[item["row"]["employee_number"], item["row"]["full_name"], item["row"].get("mof_number") or "", item["row"].get("nssf_number") or "",
              _family_text(item["row"]), len(item["months"])] + [item["totals"][f] for f in fields] for item in items]

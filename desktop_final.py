@@ -214,7 +214,7 @@ class FinalFeaturesMixin:
 
     def build_payroll_periods_panel(self, parent, row):
         frame = tk.LabelFrame(parent, text="Effective periods (rates and ceilings apply From Date to To Date)", bg=LIGHT, padx=6, pady=4)
-        frame.grid(row=row, column=0, columnspan=4, padx=10, pady=6, sticky="ew")
+        frame.grid(row=row, column=0, columnspan=6, padx=10, pady=6, sticky="ew")
         columns = (("from", "Date From", 90), ("to", "Date To", 90), ("emp", "Employee Rate", 90), ("emp_c", "Employee Ceiling", 115), ("med", "Medical Rate", 85),
                    ("med_c", "Medical Ceiling", 110), ("fam", "Family Rate", 80), ("fam_c", "Family Ceiling", 105), ("eos", "EOS Rate", 70), ("eos_c", "EOS Ceiling", 100))
         self.payroll_periods_tree = ttk.Treeview(frame, columns=[c[0] for c in columns], show="headings", height=4)

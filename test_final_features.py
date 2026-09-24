@@ -18,6 +18,9 @@ from report_export import export_sections_excel, export_sections_pdf
 from server import run_server
 import vat_return
 import ledger_reports
+import year_end
+from company_manager import CompanyManager
+from database import utcnow
 
 
 def new_db(folder, name="test.db"):
@@ -46,7 +49,7 @@ class PayrollOfficialReportsTest(unittest.TestCase):
         for month in range(1, 7):
             for employee in (self.employee, self.manager):
                 extra = {}
-                if month == 4 and employee is self.employee: extra = {"retro_salary": "6000000", "retro_from": "01-01-2025", "retro_to": "31-03-2025"}
+                if month == 4 and employee is self.employee: extra = {"retro_salary": "60000000", "retro_from": "01-01-2025", "retro_to": "31-03-2025"}
                 if month == 6: extra["thirteenth_month"] = "60000000" if employee is self.employee else "3000"
                 if month == 3: extra.update({"transport": "2000000" if employee is self.employee else "50", "schooling": "1000000" if employee is self.employee else "0", "bonus": "0"})
                 record = db.save_payroll({"employee_id": employee["id"], "period_date": f"28-{month:02d}-2025", **extra}, user)
@@ -63,7 +66,7 @@ class PayrollOfficialReportsTest(unittest.TestCase):
 
     def test_ceilings_follow_the_period_of_each_month(self):
         rows = {r["period_date"]: r for r in self.db.list_payroll() if r["employee_id"] == self.employee["id"]}
-        self.assertEqual(float(rows["2025-04-28"]["employee_nssf"]), 1500000)  # 66M capped at 50M ceiling
+        self.assertEqual(float(rows["2025-04-28"]["employee_nssf"]), 1500000)  # 60M capped at the 50M ceiling; the retro months were already above it
         self.assertEqual(float(rows["2025-05-28"]["employee_nssf"]), 1800000)  # 60M under the new 140M ceiling
         self.assertGreater(float(rows["2025-04-28"]["retro_tax"]), 0)
 
@@ -72,7 +75,7 @@ class PayrollOfficialReportsTest(unittest.TestCase):
         headings = [s["heading"] for s in report["sections"]]
         self.assertIn("Salary tax withheld - Employees", headings); self.assertIn("Salary tax withheld - Managers", headings)
         tax = report["sections"][headings.index("Salary tax withheld - Employees")]
-        self.assertEqual(cell(tax, 0, "Months"), 3); self.assertEqual(cell(tax, 0, "Retro Salary"), 6000000)
+        self.assertEqual(cell(tax, 0, "Months"), 3); self.assertEqual(cell(tax, 0, "Retro Salary"), 60000000)
         self.assertEqual(cell(tax, 0, "13th Salary"), 60000000); self.assertGreater(cell(tax, 0, "of which Retro Tax"), 0)
         nssf = report["sections"][headings.index("NSSF contributions - Employees")]
         self.assertEqual(cell(nssf, 0, "Employee NSSF (3%)"), 1500000 + 1800000 + 3600000)
@@ -91,7 +94,7 @@ class PayrollOfficialReportsTest(unittest.TestCase):
         self.assertEqual(cell(march["sections"][0], 0, "Transport"), 2000000); self.assertEqual(cell(march["sections"][0], 0, "Schooling"), 1000000)
         r5 = build_payroll_report(self.db, "R5", "yearly", 2025, 1, "employee")
         summary = r5["sections"][0]; items = {row[0]: row[1] for row in summary["rows"]}
-        self.assertEqual(items["Number of employees"], 1); self.assertEqual(items["Retro Salary"], 6000000)
+        self.assertEqual(items["Number of employees"], 1); self.assertEqual(items["Retro Salary"], 60000000)
         r6 = build_payroll_report(self.db, "R6", "yearly", 2025, 1, "both")
         employee_sheet = next(s for s in r6["sections"] if "Rami Employee" in s["heading"])
         self.assertEqual(len(employee_sheet["rows"]), 7)  # six months + total
@@ -423,6 +426,92 @@ class Stage3PaymentsPurchasesExpensesTest(unittest.TestCase):
         wb.save(Path(self.folder.name) / "customs.xlsx")
         costs = read_customs_costs(Path(self.folder.name) / "customs.xlsx")
         self.assertEqual((costs["freight"], costs["customs_duties"], costs["import_vat"], costs["customs_declaration_no"]), (120, 200, 42, "D-1"))
+
+class YearEndClosingTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); root = Path(self.folder.name)
+        self.master = Database(root / "master.db"); self.master.initialize("secret")
+        self.manager = CompanyManager(root / "master.db"); self.company = self.manager.list_companies()[0]["id"]  # the default company (no folder yet)
+        self.db = self.manager.database(self.company, 2024); u = 1
+        self.db.save_exchange_rate({"date_from": "01-01-2024", "date_to": "31-12-2024", "from_currency": "USD", "to_currency": "LBP", "rate": "89500"}, u)
+        self.party = self.db.save_party({"kind": "customer", "name": "Client A", "account_category": "client"}, u)
+        self.db.create_manual_invoice({"invoice_date": "15-03-2024", "party_name": "Client A", "kind": "sales", "currency": "USD", "status": "posted", "source_file": "Sales Invoice"},
+                                      [{"description": "S", "quantity": 1, "unit_price": 1000}], u)
+        self.db.create_manual_invoice({"invoice_date": "16-03-2024", "party_name": "Local", "kind": "sales", "currency": "LBP", "status": "posted"}, [{"description": "S", "quantity": 1, "unit_price": 8950000}], u)
+        self.db.add_expense({"expense_date": "20-03-2024", "description": "Rent", "currency": "USD", "with_vat_subtotal": "300", "vat": "0"}, u)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def test_close_as_journal_voucher_and_open_next_year(self):
+        with self.db.connect() as db:  # an old-style closing that must be removed
+            entry = db.execute("INSERT INTO journal_entries(entry_number,entry_date,description,source_type,source_id,currency,created_at) VALUES('CLOSE-2024-USD','2024-12-31','old','year_close',2024,'USD',?)", (utcnow(),)).lastrowid
+            db.execute("INSERT INTO journal_lines(entry_id,account_id,debit,credit) VALUES(?,(SELECT id FROM accounts WHERE code='121'),'5','0')", (entry,))
+        result = self.manager.close_and_open_year(self.company, 2024, 1)
+        self.assertEqual(result["removed_old_closing"], 1); self.assertEqual(sorted(result["opening_vouchers"]), ["OPEN-2025-LBP", "OPEN-2025-USD"])
+        vouchers = {e["entry_number"]: e for e in self.db.journal() if e["source_type"] == "journal_voucher"}
+        self.assertEqual(len({e["entry_id"] for e in vouchers.values()}), 2)
+        detail = self.db.journal_voucher_detail(next(iter(vouchers.values()))["entry_id"])
+        self.assertEqual(detail["voucher"]["voucher_type"], "05"); self.assertTrue(detail["voucher"]["description"].startswith("CLOSING 6&7 - 2024"))
+        closed_pnl = self.db.profit_and_loss("2024-01-01", "2024-12-31")
+        self.assertEqual({r["code"]: r["amount"] for r in closed_pnl if r["currency"] == "USD"}, {"601100000": 300, "713": 1000})
+        pnl = ledger_reports.build_account_report(self.db, {"profit_loss_only": True, "first_column": "USD", "second_column": "none"})
+        self.assertEqual(float(pnl["sections"][0]["rows"][-1][-1]), -1000 + 300 - 100)  # still shows the year's result
+        next_year = self.manager.database(self.company, 2025)
+        tb = ledger_reports.build_account_report(next_year, {"first_column": "account", "second_column": "LBP"})
+        usd = next(s for s in tb["sections"] if s["heading"].endswith("USD"))["rows"]
+        balances = {r[0]: (float(r[-4]), float(r[-1])) for r in usd}
+        self.assertEqual(balances["121"], (-700, -62650000)); self.assertEqual(balances[self.party["account_number"]], (1110, 99345000))
+        self.assertNotIn("713", balances); self.assertEqual(balances["GRAND TOTAL"], (0, 0))
+        with self.assertRaisesRegex(ValueError, "already closed"): self.manager.close_and_open_year(self.company, 2024, 1)
+
+    def test_delete_closing_reopen_and_provisional_opening(self):
+        self.manager.close_and_open_year(self.company, 2024, 1)
+        reopened = self.manager.reopen_year(self.company, 2024, 1)
+        self.assertEqual((reopened["removed_closing_entries"], reopened["removed_opening_entries"]), (2, 2))
+        self.assertFalse([e for e in self.db.journal() if e["source_type"] == "journal_voucher"])
+        refreshed = self.manager.refresh_opening(self.company, 2024, 1)
+        self.assertTrue(refreshed["provisional"])
+        lines = {(e["currency"], e["account_code"]): e["debit"] - e["credit"] for e in self.manager.database(self.company, 2025).journal() if e["source_type"] == "opening"}
+        self.assertEqual(lines[("USD", "121")], -700); self.assertEqual(lines[("LBP", "121")], -8950000)
+        self.assertNotIn(("USD", "713"), lines)
+
+class LebanesePayrollRulesTest(unittest.TestCase):
+    """Worked examples under Budget Law 324/2024, Decree 12966/2024, MoF decision 1195 and the NSSF memos."""
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
+        self.db.apply_lebanese_payroll_rules(self.user)
+        self.single = self.db.save_employee({"employee_number": "1000", "full_name": "Single", "currency": "LBP", "base_salary": "89500000", "nssf_number": "1", "mof_number": "2"}, self.user)
+        self.family = self.db.save_employee({"employee_number": "2000", "full_name": "Married", "currency": "USD", "base_salary": "2000", "marital_status": "married", "children": 3}, self.user)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def calc(self, employee, date, **extra): return self.db.calculate_payroll({"employee_id": employee["id"], "period_date": date, **extra})
+
+    def test_official_periods_and_published_example(self):
+        periods = [(p["date_from"], p["medical_ceiling"], p["family_ceiling"], p["tax_rounding"]) for p in self.db.list_payroll_settings()]
+        self.assertEqual(periods[1], ("2024-04-01", "90000000", "12000000", "0")); self.assertEqual(periods[-1], ("2026-05-01", "120000000", "28000000", "10000"))
+        result = self.calc(self.single, "30-04-2024")  # L'Orient Today worked example: LBP 1.074 bn a year, single
+        self.assertEqual((result["income_tax_lbp"], result["employee_nssf_lbp"], result["compliance_notes"]), (1480000, 2685000, []))
+
+    def test_exemptions_one_off_retro_and_rounding(self):
+        transport = self.calc(self.single, "31-01-2025", transport="13500000", transport_days="22")
+        self.assertEqual((transport["exempt_transport"], transport["income_tax_lbp"]), (9900000, 1630000))
+        thirteenth = self.calc(self.single, "31-12-2025", thirteenth_month="89500000")
+        self.assertEqual((thirteenth["regular_tax"], thirteenth["one_off_tax"], thirteenth["employee_nssf_lbp"]), (1480000, 3580000, 3600000))
+        retro = self.calc(self.single, "31-05-2025", retro_salary="9000000", retro_from="01-01-2025", retro_to="31-03-2025")
+        self.assertEqual((retro["retro_tax_lbp"], retro["employee_nssf_lbp"]), (360000, 2730000))  # NSSF uses the 90M ceiling of Jan-Mar 2025
+        family = self.calc(self.family, "31-05-2026")
+        self.assertEqual(family["income_tax_lbp"], 4960000); self.assertAlmostEqual(family["family_allowance"], 62.18, places=2)
+        self.assertIn("NSSF number missing in the employee file", family["compliance_notes"])
+        with self.assertRaisesRegex(ValueError, "Transport days"): self.calc(self.single, "31-01-2025", transport_days="40")
+
+    def test_family_allowance_posting_balances(self):
+        saved = self.db.save_payroll({"employee_id": self.family["id"], "period_date": "31-05-2026"}, self.user)
+        self.assertEqual(json_notes := __import__("json").loads(saved["compliance_notes"]), json_notes)
+        self.db.post_payroll(saved["id"], self.user)
+        self.assertAlmostEqual(sum(r["debit"] - r["credit"] for r in self.db.journal()), 0, places=2)
+        nssf = [r for r in self.db.journal() if r["account_code"] == "447100001"]
+        self.assertAlmostEqual(sum(r["debit"] for r in nssf), 62.18, places=2)
 
 class StandaloneEndToEndTest(unittest.TestCase):
     """Runs the embedded data service exactly as the installed app does and drives it through the API."""

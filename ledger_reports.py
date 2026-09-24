@@ -41,6 +41,8 @@ def _load_lines(db, options):
     if status == "posted": conditions.append("(e.source_type!='invoice' OR i.status IN ('posted','cancelled') OR i.status IS NULL)")
     elif status == "review": conditions.append("(e.source_type='invoice' AND i.status='review')")
     if options.get("branch_id"): conditions.append("e.branch_id=?"); parameters.append(int(options["branch_id"]))
+    if options.get("exclude_closing", _truthy(options.get("profit_loss_only", False)) or _truthy(options.get("budget", False))):
+        conditions.append("NOT (e.source_type='year_close' OR (e.voucher_type='05' AND e.description LIKE 'CLOSING 6&7 - %'))")
     if options.get("department_id"): conditions.append("j.department_id=?"); parameters.append(int(options["department_id"]))
     if options.get("project_id"): conditions.append("j.project_id=?"); parameters.append(int(options["project_id"]))
     where = " WHERE " + " AND ".join(conditions) if conditions else ""

@@ -213,4 +213,6 @@ class ApiClient:
     def replace_invoice(self,invoice_id,invoice,items): return self.request("POST",f"/api/invoices/{invoice_id}/replace",{"invoice":invoice,"items":items})["invoice_id"]
     def add_landed_cost(self,purchase_id,item): return self.request("POST",f"/api/invoices/{purchase_id}/landed-cost",item)["invoice_id"]
     def landed_costs(self,purchase_id): return self.request("GET",f"/api/invoices/{purchase_id}/landed-costs")["items"]
+    def closing_preview(self,year): return self.request("GET",f"/api/fiscal-years/closing-preview?{urlencode({'year':year})}")
+    def apply_lebanese_payroll_rules(self): return self.request("POST","/api/payroll/apply-lebanese-rules",{})["items"]
 

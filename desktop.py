@@ -231,6 +231,9 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         self.action_button(window,"Save Company",update).grid(row=3,column=0,padx=6,pady=14); self.action_button(window,"Create Separate Year",create_year).grid(row=3,column=1,padx=6,pady=14)
 
     def main_screen(self):
+        # Forget the widgets of the previous screen (switching company / year rebuilds every page).
+        for name in ("purchase_form","expense_form","payment_forms","trial_state","statement_state","voucher_sheet","budget_sheet","departments_tree","pr_tree","vat_summary_tree","_dimensions","_account_cache"):
+            self.__dict__.pop(name,None)
         self.clear(); lang=self.language.get()
         top=tk.Frame(self,bg=NAVY,height=76); top.pack(fill="x"); top.pack_propagate(False)
         try:
@@ -1197,35 +1200,45 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         self.payroll_vars={name:tk.StringVar(value="0") for name in ("salary","transport","overtime","commission","retro_salary","schooling","bonus","thirteenth_month")}
         self.payroll_retro_from=tk.StringVar(); self.payroll_retro_to=tk.StringVar()
         tk.Label(form,text="Employee",bg=LIGHT).grid(row=0,column=0,padx=6,pady=5,sticky="w")
-        self.payroll_employee_combo=ttk.Combobox(form,textvariable=self.payroll_employee,state="readonly",width=34); self.payroll_employee_combo.grid(row=0,column=1,padx=6,pady=5,sticky="w")
+        self.payroll_employee_combo=ttk.Combobox(form,textvariable=self.payroll_employee,state="readonly",width=26); self.payroll_employee_combo.grid(row=0,column=1,padx=6,pady=5,sticky="w")
+        self.payroll_employee_combo.bind("<<ComboboxSelected>>",lambda _event:self.payroll_employee_chosen())
         tk.Label(form,text="Period Date",bg=LIGHT).grid(row=0,column=2,padx=6,pady=5,sticky="w"); self.date_entry(form,self.payroll_period,14).grid(row=0,column=3,padx=6,pady=5,sticky="w")
         labels=(("salary","Salary"),("transport","Transport"),("overtime","Overtime"),("commission","Commission"),("retro_salary","Retroactive Salary"),("schooling","Schooling"),("bonus","Bonus"),("thirteenth_month","13th Month"))
         for index,(key,label) in enumerate(labels):
-            row=1+index//4; column=(index%4)*2
-            tk.Label(form,text=label,bg=LIGHT).grid(row=row,column=column,padx=6,pady=5,sticky="w")
-            tk.Entry(form,textvariable=self.payroll_vars[key],width=16).grid(row=row,column=column+1,padx=6,pady=5,sticky="w")
-        tk.Label(form,text="Retro From",bg=LIGHT).grid(row=3,column=0,padx=6,pady=5,sticky="w"); self.date_entry(form,self.payroll_retro_from,14).grid(row=3,column=1,padx=6,pady=5)
-        tk.Label(form,text="Retro To",bg=LIGHT).grid(row=3,column=2,padx=6,pady=5,sticky="w"); self.date_entry(form,self.payroll_retro_to,14).grid(row=3,column=3,padx=6,pady=5)
+            row=1+index//3; column=(index%3)*2
+            tk.Label(form,text=label,bg=LIGHT).grid(row=row,column=column,padx=6,pady=4,sticky="w")
+            tk.Entry(form,textvariable=self.payroll_vars[key],width=16).grid(row=row,column=column+1,padx=6,pady=4,sticky="w")
+        tk.Label(form,text="Retro From",bg=LIGHT).grid(row=4,column=0,padx=6,pady=4,sticky="w"); self.date_entry(form,self.payroll_retro_from,14).grid(row=4,column=1,padx=6,pady=4,sticky="w")
+        tk.Label(form,text="Retro To",bg=LIGHT).grid(row=4,column=2,padx=6,pady=4,sticky="w"); self.date_entry(form,self.payroll_retro_to,14).grid(row=4,column=3,padx=6,pady=4,sticky="w")
+        self.payroll_transport_days=tk.StringVar()
+        tk.Label(form,text="Transport Days",bg=LIGHT).grid(row=4,column=4,padx=6,pady=4,sticky="w"); tk.Entry(form,textvariable=self.payroll_transport_days,width=6).grid(row=4,column=5,padx=6,pady=4,sticky="w")
+        self.payroll_breakdown=tk.Label(form,text="",bg=LIGHT,fg="#5f6b76",anchor="w",justify="left",wraplength=1060); self.payroll_breakdown.grid(row=6,column=0,columnspan=8,padx=6,sticky="w")
+        self.payroll_notes=tk.Label(form,text="",bg=LIGHT,fg="#8B1E1E",anchor="w",justify="left",font=("Segoe UI",9,"bold"),wraplength=1060); self.payroll_notes.grid(row=7,column=0,columnspan=8,padx=6,sticky="w")
         self.payroll_result=tk.StringVar(value="Gross: 0 | Tax: 0 | Employee NSSF: 0 | Net: 0")
-        tk.Label(form,textvariable=self.payroll_result,bg=LIGHT,fg=NAVY,font=("Segoe UI",10,"bold")).grid(row=4,column=0,columnspan=6,padx=6,pady=9,sticky="w")
-        self.action_button(form,"Calculate",self.calculate_payroll).grid(row=4,column=6,padx=5,pady=7)
-        self.action_button(form,"Save Payroll",self.save_payroll).grid(row=4,column=7,padx=5,pady=7)
+        tk.Label(form,textvariable=self.payroll_result,bg=LIGHT,fg=NAVY,font=("Segoe UI",10,"bold"),wraplength=1000,justify="left").grid(row=5,column=0,columnspan=8,padx=6,pady=6,sticky="w")
+        buttons=tk.Frame(form,bg=LIGHT); buttons.grid(row=0,column=4,columnspan=4,sticky="w",padx=6)
+        self.action_button(buttons,"Calculate",self.calculate_payroll).pack(side="left",padx=3)
+        tk.Button(buttons,text="Save Payroll",command=self.save_payroll,bg=GOLD,fg=NAVY,border=0,padx=15,pady=7,font=("Segoe UI",9,"bold")).pack(side="left",padx=3)
         payroll_actions=tk.Frame(run,bg=LIGHT); payroll_actions.pack(fill="x",padx=10)
         self.action_button(payroll_actions,"Post Selected to Accounting",self.post_selected_payroll).pack(side="left",padx=4,pady=3)
         self.payroll_tree=self.table(run,[("number","Payroll No.",135),("period","Period",95),("employee","Employee",190),("currency","Currency",65),
             ("gross","Gross",105),("tax","Tax",95),("nssf","Employee NSSF",110),("net","Net Salary",110),("status","Status",75)])
-        self.payroll_setting_vars={key:tk.StringVar() for key in ("date_from","date_to","single_allowance","spouse_allowance","child_allowance","employee_nssf_rate","medical_rate","end_service_rate","family_rate","employee_ceiling","medical_ceiling","family_ceiling","end_service_ceiling","salary_account","salary_payable_account","payroll_tax_account","nssf_payable_account")}
-        setting_labels=(("date_from","Date From"),("date_to","Date To"),("single_allowance","Single Allowance"),("spouse_allowance","Spouse Allowance"),("child_allowance","Child Allowance"),("employee_nssf_rate","Employee NSSF Rate"),("medical_rate","Employer Medical Rate"),("end_service_rate","End Service Rate"),("family_rate","Family Rate"),("employee_ceiling","Employee NSSF Ceiling"),("medical_ceiling","Medical Ceiling"),("family_ceiling","Family Ceiling"),("end_service_ceiling","End Service Ceiling"),("salary_account","Salary Expense Account"),("salary_payable_account","Salary Payable Account"),("payroll_tax_account","Payroll Tax Account"),("nssf_payable_account","NSSF Payable Account"))
+        self.payroll_setting_vars={key:tk.StringVar() for key in ("date_from","date_to","single_allowance","spouse_allowance","child_allowance","employee_nssf_rate","medical_rate","end_service_rate","family_rate","employee_ceiling","medical_ceiling","family_ceiling","end_service_ceiling","salary_account","salary_payable_account","payroll_tax_account","nssf_payable_account",
+            "max_children_deduction","transport_daily_exempt","default_transport_days","schooling_annual_exempt","schooling_max_children","tax_rounding","minimum_wage","family_allowance_spouse","family_allowance_child","family_allowance_cap","family_allowance_max_children")}
+        setting_labels=(("date_from","Date From"),("date_to","Date To"),("single_allowance","Single Allowance"),("spouse_allowance","Spouse Allowance"),("child_allowance","Child Allowance"),("employee_nssf_rate","Employee NSSF Rate"),("medical_rate","Employer Medical Rate"),("end_service_rate","End Service Rate"),("family_rate","Family Rate"),("employee_ceiling","Employee NSSF Ceiling"),("medical_ceiling","Medical Ceiling"),("family_ceiling","Family Ceiling"),("end_service_ceiling","End Service Ceiling"),("salary_account","Salary Expense Account"),("salary_payable_account","Salary Payable Account"),("payroll_tax_account","Payroll Tax Account"),("nssf_payable_account","NSSF Payable Account"),
+            ("max_children_deduction","Tax Deduction Children"),("transport_daily_exempt","Transport Exempt / Day"),("default_transport_days","Default Transport Days"),("schooling_annual_exempt","Schooling Exempt / Year"),("schooling_max_children","Schooling Children"),
+            ("tax_rounding","Round Tax Up To"),("minimum_wage","Minimum Wage"),("family_allowance_spouse","Allowance Spouse"),("family_allowance_child","Allowance per Child"),("family_allowance_cap","Allowance Maximum"),("family_allowance_max_children","Allowance Children"))
         for index,(key,label) in enumerate(setting_labels):
-            column=0 if index<9 else 2; row=index if index<9 else index-9
-            tk.Label(settings_page,text=label,bg=LIGHT).grid(row=row,column=column,padx=10,pady=4,sticky="w")
-            tk.Entry(settings_page,textvariable=self.payroll_setting_vars[key],width=24).grid(row=row,column=column+1,padx=10,pady=4,sticky="w")
-        tk.Label(settings_page,text="Tax Brackets JSON (annual LBP): [[ceiling,rate], ... [null,rate]]   Rates as decimals: 3% = 0.03   Dates: DD-MM-YYYY",bg=LIGHT).grid(row=9,column=0,columnspan=2,padx=10,pady=4,sticky="w")
-        self.payroll_brackets=tk.Text(settings_page,width=62,height=5); self.payroll_brackets.grid(row=10,column=0,columnspan=4,padx=10,pady=5,sticky="ew")
-        self.action_button(settings_page,"Load Settings",self.load_payroll_settings).grid(row=11,column=0,padx=10,pady=10)
-        self.action_button(settings_page,"Save Settings",self.save_payroll_settings).grid(row=11,column=1,padx=10,pady=10)
-        self.build_payroll_periods_panel(settings_page,12)
-        mapping_frame=tk.LabelFrame(settings_page,text="Standard Posting Accounts",bg=LIGHT,padx=8,pady=6); mapping_frame.grid(row=13,column=0,columnspan=4,padx=10,pady=8,sticky="ew")
+            column=(index//10)*2; row=index%10
+            tk.Label(settings_page,text=label,bg=LIGHT).grid(row=row,column=column,padx=(10,2),pady=3,sticky="w")
+            tk.Entry(settings_page,textvariable=self.payroll_setting_vars[key],width=13).grid(row=row,column=column+1,padx=(2,10),pady=3,sticky="w")
+        tk.Label(settings_page,text="Tax Brackets JSON (annual LBP): [[ceiling,rate], ... [null,rate]]   Rates as decimals: 3% = 0.03   Dates: DD-MM-YYYY",bg=LIGHT).grid(row=10,column=0,columnspan=4,padx=10,pady=4,sticky="w")
+        self.payroll_brackets=tk.Text(settings_page,width=62,height=4); self.payroll_brackets.grid(row=11,column=0,columnspan=6,padx=10,pady=5,sticky="ew")
+        self.action_button(settings_page,"Load Settings",self.load_payroll_settings).grid(row=12,column=0,padx=10,pady=10)
+        self.action_button(settings_page,"Save Settings",self.save_payroll_settings).grid(row=12,column=1,padx=10,pady=10)
+        tk.Button(settings_page,text="Load Lebanese Law 2024-2026",command=self.apply_lebanese_payroll_rules,bg=GOLD,fg=NAVY,border=0,padx=14,pady=7,font=("Segoe UI",9,"bold")).grid(row=12,column=2,columnspan=2,padx=10,pady=10)
+        self.build_payroll_periods_panel(settings_page,13)
+        mapping_frame=tk.LabelFrame(settings_page,text="Standard Posting Accounts",bg=LIGHT,padx=8,pady=6); mapping_frame.grid(row=14,column=0,columnspan=6,padx=10,pady=8,sticky="ew")
         self.payroll_employee_accounts={key:tk.StringVar() for key in ("salary","transport","overtime","commission","retro_salary","schooling","bonus","thirteenth_month","tax","nssf","payable")}
         self.payroll_manager_accounts={key:tk.StringVar() for key in self.payroll_employee_accounts}
         tk.Label(mapping_frame,text="Component",bg=LIGHT,font=("Segoe UI",9,"bold")).grid(row=0,column=0,padx=5); tk.Label(mapping_frame,text="Employees",bg=LIGHT,font=("Segoe UI",9,"bold")).grid(row=0,column=1,padx=5); tk.Label(mapping_frame,text="Managers",bg=LIGHT,font=("Segoe UI",9,"bold")).grid(row=0,column=2,padx=5)
@@ -1275,15 +1288,20 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         for row in self.employee_rows: self.employee_tree.insert("","end",iid=str(row["id"]),values=(row["employee_number"],row["full_name"],row["job_title"],row.get("branch_name") or "",row["currency"],row["base_salary"],row["nssf_number"],"Yes" if row["active"] else "No"))
         self.payroll_employee_map={f'{row["employee_number"]} - {row["full_name"]}':row for row in self.employee_rows if row["active"]}
         self.payroll_employee_combo["values"]=list(self.payroll_employee_map)
-        if not self.payroll_employee.get() and self.payroll_employee_map: self.payroll_employee.set(next(iter(self.payroll_employee_map)))
+        if not self.payroll_employee.get() and self.payroll_employee_map: self.payroll_employee.set(next(iter(self.payroll_employee_map))); self.payroll_employee_chosen()
         self.payroll_tree.delete(*self.payroll_tree.get_children())
         for row in payroll: self.payroll_tree.insert("","end",iid=str(row["id"]),values=(row["payroll_number"],safe_display_date(row["period_date"]),row["full_name"],row["currency"],f'{float(row["gross_salary"]):,.2f}',f'{float(row["income_tax"]):,.2f}',f'{float(row["employee_nssf"]):,.2f}',f'{float(row["net_salary"]):,.2f}',row["status"]))
+
+    def payroll_employee_chosen(self):
+        employee=getattr(self,"payroll_employee_map",{}).get(self.payroll_employee.get())
+        if employee: self.payroll_vars["salary"].set(str(employee.get("base_salary") or "0"))
 
     def payroll_payload(self):
         employee=self.payroll_employee_map.get(self.payroll_employee.get())
         if not employee: raise ValueError("Select an employee")
         payload={"employee_id":employee["id"],"period_date":formatted_user_date(self.payroll_period.get())}
         payload.update({key:var.get().strip() or "0" for key,var in self.payroll_vars.items()})
+        if self.payroll_transport_days.get().strip(): payload["transport_days"]=self.payroll_transport_days.get().strip()
         if float(payload.get("retro_salary") or 0):
             if not self.payroll_retro_from.get().strip() or not self.payroll_retro_to.get().strip(): raise ValueError("Enter Retro From and Retro To dates")
             payload["retro_from"]=formatted_user_date(self.payroll_retro_from.get()); payload["retro_to"]=formatted_user_date(self.payroll_retro_to.get())
@@ -1295,6 +1313,9 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         retro=f' (of which retro tax {result["retro_tax"]:,.2f})' if result.get("retro_tax") else ""
         rules=result.get("settings_period") or {}
         period=f' | Rules from {safe_display_date(rules["date_from"])}' if rules.get("date_from") else ""
+        self.payroll_breakdown.config(text=f'Tax: regular {result.get("regular_tax",0):,.2f} + bonus/13th {result.get("one_off_tax",0):,.2f} + retro {result.get("retro_tax",0):,.2f}   |   Exempt: transport {result.get("exempt_transport",0):,.2f} ({result.get("transport_days","")} days), schooling {result.get("exempt_schooling",0):,.2f}   |   NSSF family allowance paid: {result.get("family_allowance",0):,.2f} {result["currency"]}')
+        self.payroll_notes.config(text=("Check: "+"  |  ".join(result.get("compliance_notes") or [])) if result.get("compliance_notes") else "Compliant with the rules of this period")
+        self.payroll_notes.config(fg="#8B1E1E" if result.get("compliance_notes") else NAVY)
         self.payroll_result.set(f'Gross: {result["gross_salary"]:,.2f} | Tax: {result["income_tax"]:,.2f} {result["currency"]} ({result["income_tax_lbp"]:,.0f} LBP){retro} | Employee NSSF: {result["employee_nssf"]:,.2f} | Employer NSSF: {result["employer_medical"]+result["employer_family"]+result["employer_end_service"]:,.2f} | Net: {result["net_salary"]:,.2f}{period}')
 
     def save_payroll(self):
@@ -1320,6 +1341,15 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         for key,var in self.payroll_employee_accounts.items(): var.set(settings.get("employee_account_map",{}).get(key,""))
         for key,var in self.payroll_manager_accounts.items(): var.set(settings.get("manager_account_map",{}).get(key,""))
         self.payroll_brackets.delete("1.0","end"); self.payroll_brackets.insert("1.0",json.dumps(settings.get("tax_brackets",[])))
+
+    def apply_lebanese_payroll_rules(self):
+        if not messagebox.askyesno("Lebanese Payroll Rules","Replace ALL Tax & NSSF periods with the official Lebanese rules from 01-01-2024?\n\n"
+            "- Budget Law 2024 brackets and family deductions\n- Transport exempt 450,000 LBP/day, schooling 6M/year\n- Tax rounded up to 10,000 LBP from 25-11-2024\n"
+            "- NSSF ceilings: 45M -> 90M (04-2024) -> 120M (08-2025); family 12M -> 18M (07-2025) -> 28M (05-2026)\n- NSSF family allowances from 05-2026 (Decree 2923)\n\n"
+            "Employer sickness & maternity is set to 8% (check with your accountant). Posting accounts are kept. Already saved payroll is NOT recalculated."): return
+        try: self.client.apply_lebanese_payroll_rules()
+        except Exception as exc: return messagebox.showerror("Lebanese Payroll Rules",str(exc))
+        self.load_payroll_periods(); self.load_payroll_settings(); messagebox.showinfo("Lebanese Payroll Rules","Lebanese payroll rules loaded. Recalculate draft payroll to apply them.")
 
     def save_payroll_settings(self):
         payload={key:var.get().strip() for key,var in self.payroll_setting_vars.items()}
@@ -1455,25 +1485,52 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         except Exception as exc: messagebox.showerror("General Journal",str(exc))
 
     def build_profit_loss(self):
-        controls=tk.Frame(self.pnl_tab,bg=LIGHT); controls.pack(fill="x",padx=10,pady=10)
+        year=getattr(self,"current_fiscal_year",datetime.now().year)
+        self.pnl_from_date.set(f"01-01-{year}"); self.pnl_to_date.set(f"31-12-{year}"); self.close_year.set(str(year))
+        controls=tk.Frame(self.pnl_tab,bg=LIGHT); controls.pack(fill="x",padx=10,pady=(10,4))
+        tk.Label(controls,text=f"Fiscal Year {year}",bg=NAVY,fg="white",font=("Segoe UI",10,"bold"),padx=10,pady=4).pack(side="left",padx=(0,10))
         tk.Label(controls,text="From:",bg=LIGHT).pack(side="left")
-        self.date_entry(controls,self.pnl_from_date,13).pack(side="left",padx=(4,10))
+        self.date_entry(controls,self.pnl_from_date,11).pack(side="left",padx=(4,10))
         tk.Label(controls,text="To:",bg=LIGHT).pack(side="left")
-        self.date_entry(controls,self.pnl_to_date,13).pack(side="left",padx=(4,10))
+        self.date_entry(controls,self.pnl_to_date,11).pack(side="left",padx=(4,10))
         tk.Button(controls,text="Apply",command=self.load_profit_loss,bg=GOLD,fg=NAVY,border=0,padx=15,pady=6).pack(side="left")
-        tk.Label(controls,text="Close Fiscal Year:",bg=LIGHT,font=("Segoe UI",9,"bold")).pack(side="right",padx=(10,4))
-        tk.Entry(controls,textvariable=self.close_year,width=8).pack(side="right")
-        tk.Button(controls,text="Close Year & Open Next",command=self.close_fiscal_year,bg="#8B1E1E",fg="white",border=0,padx=14,pady=6).pack(side="right",padx=6)
-        tk.Button(controls,text="Reopen Year",command=self.reopen_fiscal_year,bg=NAVY,fg="white",border=0,padx=12,pady=6).pack(side="right",padx=4)
-        tk.Button(controls,text="Refresh Next-Year Opening",command=self.refresh_next_year_opening,bg=NAVY,fg="white",border=0,padx=12,pady=6).pack(side="right",padx=4)
+        self.fiscal_status=tk.Label(controls,text="",bg=LIGHT,font=("Segoe UI",9,"bold")); self.fiscal_status.pack(side="left",padx=12)
+        closing=tk.LabelFrame(self.pnl_tab,text=f"Year-end closing {year}",bg=LIGHT,padx=8,pady=5); closing.pack(fill="x",padx=10,pady=4)
+        self.action_button(closing,"Preview Closing 6&7",self.preview_closing).pack(side="left",padx=(0,4))
+        tk.Button(closing,text=f"Close {year} & Open {year+1}",command=self.close_fiscal_year,bg="#8B1E1E",fg="white",border=0,padx=14,pady=7,font=("Segoe UI",9,"bold")).pack(side="left",padx=4)
+        tk.Button(closing,text="Delete Closing & Reopen Year",command=self.reopen_fiscal_year,bg=NAVY,fg="white",border=0,padx=12,pady=7).pack(side="left",padx=4)
+        tk.Button(closing,text=f"Refresh Opening of {year+1}",command=self.refresh_next_year_opening,bg=NAVY,fg="white",border=0,padx=12,pady=7).pack(side="left",padx=4)
+        tk.Label(closing,text="1 Journal Voucher per currency; result to 121 / 125",bg=LIGHT,fg="#5f6b76",wraplength=190,justify="left").pack(side="left",padx=6)
+        actions=tk.Frame(self.pnl_tab,bg=LIGHT); actions.pack(side="bottom",pady=(0,8))
         self.pnl_tree=self.table(self.pnl_tab,[("currency","Currency",85),("type","Type",90),("account","Account",100),
             ("name","Account Name",300),("debit","Debit",130),("credit","Credit",130),("amount","P&L Amount",140)])
-        actions=tk.Frame(self.pnl_tab,bg=LIGHT); actions.pack(pady=(0,10))
         self.action_button(actions,"Export Excel",lambda:self.profit_loss_report("xlsx")).pack(side="left",padx=4)
         self.action_button(actions,"Export PDF",lambda:self.profit_loss_report("pdf")).pack(side="left",padx=4)
         self.action_button(actions,"Print",lambda:self.profit_loss_report("print")).pack(side="left",padx=4)
         self.pnl_totals=tk.Label(actions,text="",bg=LIGHT,font=("Segoe UI",10,"bold")); self.pnl_totals.pack(side="left",padx=15)
         self.load_profit_loss()
+
+    def refresh_fiscal_status(self):
+        if not hasattr(self,"fiscal_status"): return
+        year=getattr(self,"current_fiscal_year",None)
+        record=next((y for y in (getattr(self,"current_company",{}) or {}).get("years",[]) if int(y["year"])==int(year or 0)),{})
+        closed=record.get("status")=="closed"
+        self.fiscal_status.config(text="CLOSED (read-only) - the P&L is shown before the closing voucher" if closed else "Open",fg="#8B1E1E" if closed else NAVY)
+
+    def preview_closing(self):
+        year=int(self.close_year.get())
+        try: data=self.client.closing_preview(year)
+        except Exception as exc: return messagebox.showerror("Closing 6&7",str(exc))
+        if not data: return messagebox.showinfo("Closing 6&7",f"There are no expense or revenue balances to close in {year}")
+        sections=[]
+        for currency,info in data.items():
+            rows=[[code,name,round(amount,2) if amount>0 else 0,round(-amount,2) if amount<0 else 0,round(abs(lbp),0)] for code,amount,lbp,_usd,name in info["lines"]]
+            rows.append(["","TOTAL",round(sum(r[2] for r in rows),2),round(sum(r[3] for r in rows),2),""])
+            sections.append({"heading":f"CLOSING 6&7 - {year} ({currency})   Net result: {info['net_result']:,.2f} {'profit' if info['net_result']>=0 else 'loss'}",
+                "headers":["Account","Account Name",f"Debit ({currency})",f"Credit ({currency})","LBP"],"rows":rows,"total_rows":[len(rows)-1]})
+        window=tk.Toplevel(self); window.title(f"Preview closing {year}"); window.geometry("900x480"); window.configure(bg=LIGHT); window.transient(self)
+        viewer=self.report_viewer(window); self.show_sections(viewer,sections)
+        self.action_button(window,"Close",window.destroy).pack(pady=6)
 
     def profit_loss_range(self):
         values=[]
@@ -1481,6 +1538,10 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
             try: values.append(parse_user_date(raw).strftime("%Y-%m-%d"))
             except ValueError: messagebox.showwarning("Profit & Loss",f"{label} must use DD-MM-YYYY"); return None
         if values[0]>values[1]: messagebox.showwarning("Profit & Loss","From Date cannot be after To Date"); return None
+        year=str(getattr(self,"current_fiscal_year",values[0][:4]))
+        if values[0][:4]!=year or values[1][:4]!=year:
+            messagebox.showwarning("Profit & Loss",f"The dates must be inside the selected fiscal year {year}. Use 'Switch Company / Year' to see another year.")
+            self.pnl_from_date.set(f"01-01-{year}"); self.pnl_to_date.set(f"31-12-{year}"); return [f"{year}-01-01",f"{year}-12-31"]
         return values
 
     def load_profit_loss(self):
@@ -1498,6 +1559,7 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
             totals.setdefault(row["currency"],0)
             totals[row["currency"]]+=row["amount"] if row["type"]=="income" else -row["amount"]
         self.pnl_totals.config(text="   ".join(f"{code} Net P&L: {amount:,.2f}" for code,amount in totals.items()) or "No activity")
+        self.refresh_fiscal_status()
 
     def profit_loss_report(self,format_name):
         rows=getattr(self,"pnl_rows",[])
@@ -1516,10 +1578,9 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         except Exception as exc: messagebox.showerror("Profit & Loss",str(exc))
 
     def close_fiscal_year(self):
-        try: year=int(self.close_year.get())
-        except ValueError: return messagebox.showwarning("Fiscal Year","Enter a valid four-digit year")
-        if year<2000 or year>2100: return messagebox.showwarning("Fiscal Year","Enter a valid four-digit year")
-        warning=f"Close fiscal year {year}?\n\nIncome and expense accounts will be closed to retained results, and fiscal year {year+1} will be opened. This cannot be repeated."
+        year=int(getattr(self,"current_fiscal_year",self.close_year.get()))
+        warning=(f"Close fiscal year {year}?\n\n- Any earlier closing of {year} is deleted first.\n- A 'CLOSING 6&7' Journal Voucher is made for each currency (result to 121 / 125).\n"
+                 f"- {year} becomes read-only and {year+1} is opened with the balance-sheet balances.\n\nYou can undo this with 'Delete Closing & Reopen Year'.")
         if not messagebox.askyesno("Close Fiscal Year",warning): return
         try: result=self.client.close_fiscal_year(year)
         except Exception as exc: return messagebox.showerror("Close Fiscal Year",str(exc))
@@ -1527,14 +1588,14 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         self.current_company=result.get("company",self.current_company); self.current_fiscal_year=year+1
         self.pnl_from_date.set(f"01-01-{year+1}"); self.pnl_to_date.set(f"31-12-{year+1}"); self.close_year.set(str(year+1))
         vouchers=", ".join(result.get("opening_vouchers",[])) or "No opening balance required"
+        closing_vouchers=", ".join(result.get("closing_vouchers",[])) or "no P&L balances"
         summary=" / ".join(f"{code}: {amount:,.2f}" for code,amount in result.get("net_results",{}).items()) or "No P&L activity"
         self.main_screen()
-        messagebox.showinfo("Fiscal Year",f"Year {year} closed successfully.\nYear {year+1} opened for {self.current_company['name']}.\nOpening Journal Voucher: {vouchers}\nNet results: {summary}")
+        messagebox.showinfo("Fiscal Year",f"Year {year} closed.\nClosing 6&7 vouchers: {closing_vouchers}\nYear {year+1} opened for {self.current_company['name']}.\nOpening vouchers: {vouchers}\nNet results: {summary}")
 
     def reopen_fiscal_year(self):
-        try: year=int(self.close_year.get())
-        except ValueError: return messagebox.showwarning("Fiscal Year","Enter a valid four-digit year")
-        if not messagebox.askyesno("Reopen Fiscal Year",f"Reopen fiscal year {year}?\n\nClosing entries will be removed. If year {year+1} exists, its old opening vouchers will also be removed until you close {year} again."): return
+        year=int(getattr(self,"current_fiscal_year",self.close_year.get()))
+        if not messagebox.askyesno("Delete Closing & Reopen",f"Delete ALL closing entries of {year} and open it again?\n\nThe opening vouchers of {year+1} are removed too, until you close {year} again."): return
         try: result=self.client.reopen_fiscal_year(year)
         except Exception as exc: return messagebox.showerror("Reopen Fiscal Year",str(exc))
         self.current_company=result.get("company",self.current_company); self.current_fiscal_year=year
@@ -1542,8 +1603,7 @@ class SaberApp(Stage3Mixin, DimensionsMixin, BrainsScreensMixin, FinalFeaturesMi
         messagebox.showinfo("Fiscal Year",f"Fiscal year {year} is open again.\nRemoved closing entries: {result.get('removed_closing_entries',0)}\nRemoved old opening entries: {result.get('removed_opening_entries',0)}")
 
     def refresh_next_year_opening(self):
-        try: year=int(self.close_year.get())
-        except ValueError: return messagebox.showwarning("Fiscal Year","Enter the source fiscal year")
+        year=int(getattr(self,"current_fiscal_year",self.close_year.get()))
         if not messagebox.askyesno("Refresh Opening",f"Replace the opening vouchers in {year+1} using the latest balances from {year}?"): return
         try: result=self.client.refresh_opening(year)
         except Exception as exc: return messagebox.showerror("Refresh Opening",str(exc))
