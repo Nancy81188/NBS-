@@ -36,7 +36,7 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed `
             --add-data "assets/Saber_for_Audit_logo.png;assets" `
-            --hidden-import payroll_reports --hidden-import vat_return --hidden-import desktop_final --hidden-import desktop_brains --hidden-import ledger_reports --hidden-import desktop_dimensions `
+            --hidden-import payroll_reports --hidden-import vat_return --hidden-import desktop_final --hidden-import desktop_brains --hidden-import ledger_reports --hidden-import desktop_dimensions --hidden-import desktop_stage3 --hidden-import pdf_import --hidden-import pypdf `
             --name SaberAccounting run_desktop.py
 
       - name: Make sure Inno Setup is available
