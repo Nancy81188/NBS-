@@ -1,0 +1,59 @@
+name: Build Saber Accounting Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Download source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install build requirements
+        run: python -m pip install -r requirements.txt
+
+      - name: Run all tests
+        run: python -m unittest discover -v -p "test_*.py"
+
+      - name: Build standalone application (data service included)
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --add-data "assets/Saber_for_Audit_logo.png;assets" `
+            --hidden-import payroll_reports --hidden-import vat_return --hidden-import desktop_final `
+            --name SaberAccounting run_desktop.py
+
+      - name: Make sure Inno Setup is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+            Add-Content $env:GITHUB_PATH "C:\Program Files (x86)\Inno Setup 6"
+          }
+
+      - name: Create Windows installer
+        run: iscc installer.iss
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: SaberAccountingSetup
+          path: installer-output/SaberAccountingSetup.exe
+          if-no-files-found: error
+          retention-days: 30
