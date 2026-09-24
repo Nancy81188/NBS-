@@ -170,3 +170,23 @@ One installer only: no Python, no manual server. The data service starts automat
 - Employer NSSF sickness & maternity rate (8% per PwC; one source says 11%).
 - Exact start dates of Jan-Feb 2024 ceilings and the 28M minimum wage.
 - VAT declaration box numbers against the official MoF form; rounding of the deduction ratio.
+
+# Version 2.1.0
+
+## Arabic in PDF
+Every PDF (reports, statements, invoices, VAT declaration, R5 / R6 / R10, NSSF statement) prints Arabic text correctly - joined letters, right-to-left - using the Amiri font (SIL Open Font License, `assets/fonts/Amiri-OFL.txt`). Official reports carry Arabic labels next to the English.
+
+## NSSF ceilings - automatic and monthly
+- A new or never-configured company loads the Lebanese periods 2024-2026 automatically (ceilings, rates, family allowances, tax rounding). Settings you changed yourself are never overwritten; "Load Lebanese Law 2024-2026" reloads them on request.
+- Payroll is monthly: each payroll uses the rules in force on the **last day of its month** (for example the 90M -> 120M ceiling change of August 2025, or the LBP 10,000 rounding from 25-11-2024 for November). Retroactive pay uses the ceilings of each of its own months.
+- Payroll > Official Reports > "CEILINGS - NSSF ceilings by month" shows the ceilings and rates of every month of a year.
+
+## NSSF payment format
+Payroll > Official Reports > "NSSF - Contributions statement (payment)", monthly or quarterly, Arabic / English:
+- per employee and month: NSSF number, salary subject, capped bases and contributions for sickness & maternity (employee 3% + employer), family allowances (6%) and end of service (8.5%), family allowances already paid, net due;
+- payment summary by branch and the net amount payable to the NSSF (LBP);
+- the monthly ceilings and rates applied; employer NSSF number from General Settings.
+"Record NSSF Payment" books the payment voucher (Dr NSSF payable / Cr cash or bank).
+
+## Fix
+Company files created by older versions are brought up to date automatically when they are opened.

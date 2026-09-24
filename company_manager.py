@@ -56,7 +56,11 @@ class CompanyManager:
         selected=next((y for y in years if int(y["year"])==int(year)),None) if year else (max(years,key=lambda y:int(y["year"])) if years else None)
         if not selected: raise KeyError("Fiscal year not found")
         path=str(Path(selected["database"]).resolve())
-        if path not in self._cache: self._cache[path]=Database(path)
+        if path not in self._cache:
+            database=Database(path)
+            # Bring files made by an older version up to date (new tables and columns); existing data is kept.
+            if Path(path).exists() and Path(path)!=self.master_path: database.initialize(secrets.token_urlsafe(24))
+            self._cache[path]=database
         return self._cache[path]
 
     def year_status(self,company_id,year):

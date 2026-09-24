@@ -43,6 +43,8 @@ class PayrollOfficialReportsTest(unittest.TestCase):
             "marital_status": "married", "children": 2, "mof_number": "MOF-1", "nssf_number": "NSSF-1"}, user)
         self.manager = db.save_employee({"employee_number": "2000", "full_name": "Maya Manager", "currency": "USD", "base_salary": "3000",
             "employee_group": "manager"}, user)
+        with db.connect() as connection:  # this test builds its own periods: keep one open period from the automatic Lebanese rules
+            connection.execute("DELETE FROM payroll_settings WHERE date_from<>'2024-01-01'"); connection.execute("UPDATE payroll_settings SET date_to=NULL")
         first = db.payroll_settings_for("2025-01-01")
         first.update({"date_from": "01-01-2025", "employee_ceiling": "50000000", "medical_ceiling": "50000000", "family_ceiling": "20000000"})
         db.save_payroll_settings(first, user)
@@ -61,7 +63,8 @@ class PayrollOfficialReportsTest(unittest.TestCase):
 
     def test_effective_periods_chain_and_reject_overlap(self):
         periods = self.db.list_payroll_settings()
-        self.assertEqual([(p["date_from"], p["date_to"]) for p in periods], [("2025-01-01", "2025-04-30"), ("2025-05-01", None)])
+        self.assertEqual([(p["date_from"], p["date_to"]) for p in periods], [("2024-01-01", "2024-12-31"), ("2025-01-01", "2025-04-30"), ("2025-05-01", None)])
+        periods = periods[1:]
         middle = dict(periods[0]); middle.update({"date_from": "01-03-2025", "date_to": "31-05-2025"})
         with self.assertRaisesRegex(ValueError, "overlaps"): self.db.save_payroll_settings(middle, self.user)
         with self.assertRaisesRegex(ValueError, "decimal rate"): self.db.save_payroll_settings({**periods[1], "employee_nssf_rate": "3"}, self.user)
@@ -237,7 +240,7 @@ class UsersAlertsAndRatesTest(unittest.TestCase):
     def test_old_payroll_date_formats_are_migrated_and_displayed(self):
         employee = self.db.save_employee({"employee_number": "1000", "full_name": "Legacy", "currency": "LBP", "base_salary": "1000"}, self.user)
         with self.db.connect() as db:
-            db.execute("UPDATE payroll_settings SET date_from='01012025'")
+            db.execute("DELETE FROM payroll_settings WHERE date_from<>'2024-01-01'"); db.execute("UPDATE payroll_settings SET date_from='01012025'")
             db.execute("""INSERT INTO payroll_records(payroll_number,employee_id,period_date,currency,retro_from,created_at)
                 VALUES('PAY-OLD-1',?,'30062025','LBP','01-01-2025','x'),('PAY-OLD-2',?,'June 2025','LBP',NULL,'x')""", (employee["id"], employee["id"]))
         self.db.initialize("secret")
@@ -625,6 +628,62 @@ class InventoryTest(unittest.TestCase):
         inventory.save_document(next_year, {"doc_type": "receipt", "doc_date": "10-02-2025", "warehouse_id": "MAIN"}, [{"sku": "ITM-00001", "quantity": 10, "unit_cost": 100}], self.user)
         second = inventory.post_stock_variation(next_year, 2025, self.user)
         self.assertEqual((second["opening"], second["closing"]), (7900, 8900))
+
+class ArabicPdfAndNssfTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
+        self.db.save_settings({"company_nssf": "1234567"}, self.user)
+        self.rami = self.db.save_employee({"employee_number": "1000", "full_name": "رامي الخوري", "currency": "LBP", "base_salary": "100000000", "nssf_number": "5550001", "mof_number": "1"}, self.user)
+        self.maya = self.db.save_employee({"employee_number": "2000", "full_name": "Maya Haddad", "currency": "USD", "base_salary": "2000", "nssf_number": "5550002", "mof_number": "2"}, self.user)
+        for employee in (self.rami, self.maya):
+            for day in ("31-07-2025", "31-08-2025", "30-09-2025"):
+                self.db.post_payroll(self.db.save_payroll({"employee_id": employee["id"], "period_date": day}, self.user)["id"], self.user)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def test_rules_load_automatically_and_apply_by_month(self):
+        self.assertEqual(len(self.db.list_payroll_settings()), 6)
+        mid_november = self.db.calculate_payroll({"employee_id": self.rami["id"], "period_date": "15-11-2024"})
+        self.assertEqual(mid_november["rules_date"], "2024-11-30"); self.assertEqual(mid_november["income_tax_lbp"] % 10000, 0)  # rounding from 25-11-2024 applies to November
+        self.assertEqual(self.db.calculate_payroll({"employee_id": self.rami["id"], "period_date": "10-08-2025"})["ceilings"]["medical"], 120000000)
+        custom = self.db.list_payroll_settings()[-1]; custom["medical_ceiling"] = "99000000"; self.db.save_payroll_settings(custom, self.user)
+        self.db.initialize("secret"); self.assertEqual(self.db.list_payroll_settings()[-1]["medical_ceiling"], "99000000")  # never overwritten
+        table = build_payroll_report(self.db, "CEILINGS", "yearly", 2025)["sections"][0]["rows"]
+        self.assertEqual((table[6][2], table[7][2], table[6][3]), (90000000, 120000000, 18000000))
+
+    def test_nssf_statement_monthly_ceilings_and_payment(self):
+        result = build_payroll_report(self.db, "NSSF", "quarterly", 2025, 3)
+        rows = {(r[1], r[2]): r for r in result["sections"][0]["rows"]}
+        self.assertEqual(rows[("رامي الخوري", "07-2025")][4:7], [90000000, 2700000, 7200000])  # 90M ceiling in July
+        self.assertEqual(rows[("رامي الخوري", "08-2025")][4:7], [100000000, 3000000, 8000000])  # 120M ceiling from August
+        self.assertEqual(rows[("Maya Haddad", "07-2025")][3:6], [179000000, 90000000, 2700000])  # USD salary converted, exact LBP
+        self.assertEqual(result["net_payable_lbp"], 145825000); self.assertIn("1234567", result["meta"][0])
+        payment = self.db.record_nssf_payment({"amount": str(result["net_payable_lbp"]), "payment_date": "15-10-2025", "cash_account": "531", "reference": "NSSF-778", "period_label": result["period_label"]}, self.user)
+        lines = [(r["account_code"], r["debit"], r["credit"]) for r in self.db.journal() if r["entry_number"] == payment["voucher"]]
+        self.assertEqual(lines, [("447100001", 145825000.0, 0.0), ("531", 0.0, 145825000.0)])
+
+    def test_arabic_text_in_pdf(self):
+        from report_export import shape_arabic, has_arabic, arabic_fonts, export_sections_pdf, export_invoice_pdf
+        self.assertEqual(arabic_fonts(), ("Amiri", "Amiri-Bold"))
+        self.assertTrue(has_arabic("شركة")); self.assertFalse(has_arabic("Company"))
+        self.assertNotEqual(shape_arabic("الضريبة"), "الضريبة")  # letters joined and ordered right-to-left
+        result = build_payroll_report(self.db, "NSSF", "quarterly", 2025, 3)
+        path = Path(self.folder.name) / "nssf.pdf"; export_sections_pdf(path, result["title"], result["meta"], result["sections"])
+        content = path.read_bytes(); self.assertTrue(content.startswith(b"%PDF")); self.assertIn(b"Amiri", content)
+        invoice = Path(self.folder.name) / "invoice.pdf"
+        export_invoice_pdf(invoice, {"invoice_number": "SAL-1", "invoice_date": "01-01-2025", "party_name": "شركة الأرز", "currency": "USD", "kind": "sale", "subtotal": 10, "vat": 1.1, "total": 11.1},
+                           [{"description": "ألواح", "quantity": 1, "unit_price": 10, "subtotal": 10, "vat_rate": 11, "vat": 1.1, "total": 11.1}], company={"company_name": "إيكولوج"})
+        self.assertIn(b"Amiri", invoice.read_bytes())
+
+    def test_old_company_files_are_upgraded_when_opened(self):
+        import sqlite3
+        root = Path(self.folder.name) / "companies"; master = Database(Path(self.folder.name) / "master.db"); master.initialize("secret")
+        manager = CompanyManager(Path(self.folder.name) / "master.db"); company = manager.create_company({"name": "Old Co", "year": 2024}, master)
+        path = company["years"][0]["database"]; connection = sqlite3.connect(path)
+        connection.execute("DROP TABLE stock_documents"); connection.execute("ALTER TABLE invoices DROP COLUMN vat_treatment"); connection.commit(); connection.close()
+        database = CompanyManager(Path(self.folder.name) / "master.db").database(company["id"], 2024)
+        database.create_manual_invoice({"invoice_date": "10-02-2024", "party_name": "X", "kind": "sales", "currency": "USD", "status": "posted"}, [{"description": "a", "quantity": 1, "unit_price": 10}], 1)
+        self.assertEqual(inventory.list_documents(database), []); self.assertEqual(len(database.list_invoices()), 1)
 
 class StandaloneEndToEndTest(unittest.TestCase):
     """Runs the embedded data service exactly as the installed app does and drives it through the API."""

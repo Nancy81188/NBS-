@@ -425,6 +425,26 @@ class Database:
                     (account_number,f"Supplier - {supplier['name']}","liability"))
                 db.execute("UPDATE invoices SET supplier_account=? WHERE party_id=? AND kind='purchase' AND supplier_account='4011'",
                     (account_number,supplier["id"]))
+        self._auto_lebanese_payroll_rules()
+
+    def _auto_lebanese_payroll_rules(self):
+        """If the Tax & NSSF settings were never filled in (all NSSF ceilings are 0), load the official Lebanese
+        periods automatically so the 2024-2026 ceilings apply month by month without any manual step."""
+        with self.connect() as db:
+            rows=db.execute("SELECT employee_ceiling,medical_ceiling,family_ceiling FROM payroll_settings").fetchall()
+            done=db.execute("SELECT value FROM app_settings WHERE key='lebanese_payroll_rules_auto'").fetchone()
+        unconfigured=not rows or all(Decimal(str(r["employee_ceiling"] or 0))==0 and Decimal(str(r["medical_ceiling"] or 0))==0 and Decimal(str(r["family_ceiling"] or 0))==0 for r in rows)
+        if done or not unconfigured: return
+        self.apply_lebanese_payroll_rules(None)
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('lebanese_payroll_rules_auto',?)",(utcnow(),))
+
+    @staticmethod
+    def month_end(value):
+        """Payroll is monthly: the rules of a month are those in force on its last day."""
+        day=datetime.strptime(iso_date(value),"%Y-%m-%d")
+        import calendar
+        return day.replace(day=calendar.monthrange(day.year,day.month)[1]).strftime("%Y-%m-%d")
 
     @staticmethod
     def user_is_expired(user, today=None):
@@ -633,7 +653,7 @@ class Database:
         with self.connect() as db: return {row["key"]:row["value"] for row in db.execute("SELECT key,value FROM app_settings")}
 
     def save_settings(self, values, user_id):
-        allowed={"base_currency","backup_interval_hours","company_name","company_address","company_phone","company_mof","company_email","company_website","company_logo"}
+        allowed={"base_currency","backup_interval_hours","company_name","company_address","company_phone","company_mof","company_nssf","company_email","company_website","company_logo"}
         if str(values.get("base_currency") or "USD") not in ("USD","EUR","LBP","AED"): raise ValueError("Invalid base currency")
         try: hours=int(values.get("backup_interval_hours",24))
         except Exception as exc: raise ValueError("Backup interval must be a number") from exc
@@ -2199,7 +2219,7 @@ class Database:
         period=iso_date(period,"Payroll period")
         with self.connect() as db: employee=db.execute("SELECT * FROM employees WHERE id=?",(employee_id,)).fetchone()
         if not employee: raise ValueError("Employee was not found")
-        settings=self.payroll_settings_for(period); D=Decimal
+        rules_date=self.month_end(period); settings=self.payroll_settings_for(rules_date); D=Decimal
         def setting(name,default="0"):
             try: return D(str(settings.get(name) if settings.get(name) not in (None,"") else default))
             except Exception: return D(default)
@@ -2237,7 +2257,7 @@ class Database:
             if end<start: raise ValueError("Retro To cannot be before Retro From")
             y,m=int(start[:4]),int(start[5:7])
             while (y,m)<=(int(end[:4]),int(end[5:7])):
-                retro_months.append(f"{y}-{m:02d}-28"); m+=1
+                retro_months.append(self.month_end(f"{y}-{m:02d}-01")); m+=1
                 if m>12: y,m=y+1,1
             share=money["retro_salary"]/len(retro_months)
             for month in retro_months:
@@ -2288,7 +2308,8 @@ class Database:
             "regular_tax":float(from_lbp(rounded(regular_tax)).quantize(D("0.01"))),"one_off_tax":float(from_lbp(max(D("0"),one_off_tax)).quantize(D("0.01"))),
             "transport_days":days,"exempt_transport":float(from_lbp(exempt_transport_lbp).quantize(D("0.01"))),"exempt_schooling":float(from_lbp(exempt_schooling_lbp).quantize(D("0.01"))),
             "family_allowance":float(family_allowance),"compliance_notes":notes,"period_date":period,
-            "settings_period":{"date_from":settings.get("date_from"),"date_to":settings.get("date_to")}}
+            "settings_period":{"date_from":settings.get("date_from"),"date_to":settings.get("date_to")},"rules_date":rules_date,
+            "ceilings":{"medical":float(D(str(settings.get("medical_ceiling") or 0))),"family":float(D(str(settings.get("family_ceiling") or 0)))}}
 
     def list_payroll(self,period_from=None,period_to=None):
         conditions=[]; values=[]
@@ -2751,4 +2772,20 @@ class Database:
                 ON CONFLICT(year) DO UPDATE SET provisional_ratio=excluded.provisional_ratio,updated_by=excluded.updated_by,updated_at=excluded.updated_at""",
                 (int(year), str(value), user_id, utcnow()))
         return value
+
+    # ---------------------------------------------------------------- NSSF payment
+    def record_nssf_payment(self, item, user_id):
+        """Payment of the NSSF statement: Dr NSSF payable / Cr cash or bank (payment voucher, type 03)."""
+        try: amount = Decimal(str(item.get("amount") or 0).replace(",", ""))
+        except Exception as exc: raise ValueError("Enter the amount paid") from exc
+        if amount <= 0: raise ValueError("The amount paid must be above zero")
+        currency = str(item.get("currency") or "LBP").upper(); date = str(item.get("payment_date") or datetime.now().strftime("%d-%m-%Y"))
+        cash = str(item.get("cash_account") or "531").split(" - ", 1)[0].strip()
+        payable = self.payroll_settings_for(iso_date(date)).get("nssf_payable_account") or "447100001"
+        period = str(item.get("period_label") or "").strip(); reference = str(item.get("reference") or "").strip()
+        voucher = self.save_journal_voucher({"entry_date": date, "description": f"NSSF payment {period}".strip() + (f" - receipt {reference}" if reference else ""),
+                                             "currency": currency, "voucher_type": "03"},
+            [{"account_code": payable, "line_currency": currency, "side": "D", "amount": str(amount), "reference": reference},
+             {"account_code": cash, "line_currency": currency, "side": "C", "amount": str(amount), "reference": reference}], user_id)
+        return {"voucher": voucher["voucher"]["entry_number"], "amount": float(amount), "currency": currency}
 

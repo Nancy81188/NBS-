@@ -33,6 +33,15 @@ LINES = (
     ("E1", "net", "NET VAT FOR THE PERIOD (B3 - C8)"),
 )
 RATE = Decimal("0.11")
+ARABIC = {"sales": "المبيعات الخاضعة للضريبة بمعدل 11%", "sales_zero": "العمليات المعفاة مع حق الحسم - التصدير (المواد 19-21)",
+          "sales_exempt": "العمليات المعفاة (المادتان 16 و17)", "sales_out": "عمليات خارج نطاق الضريبة",
+          "reverse_output": "الضريبة على الخدمات المستوردة من الخارج (المادة 40)", "adj_output": "تسويات الضريبة المستحقة", "total_output": "مجموع الضريبة المستحقة",
+          "purchases": "الضريبة القابلة للحسم - المشتريات المحلية", "assets": "الضريبة القابلة للحسم - الأصول الثابتة", "expenses": "الضريبة القابلة للحسم - المصاريف العامة",
+          "customs": "الضريبة القابلة للحسم - الاستيراد (الجمارك)", "prorata": "ينزل: الضريبة غير القابلة للحسم وفق نسبة الحسم الجزئي (المادة 31)",
+          "annual_adjustment": "التسوية السنوية لنسبة الحسم (الفصل الرابع)", "adj_input": "تسويات الضريبة القابلة للحسم", "total_input": "مجموع الضريبة القابلة للحسم",
+          "non_deductible": "ضريبة غير قابلة للحسم (للعلم)", "net": "صافي الضريبة عن الفترة", "credit_bf": "الرصيد الدائن المدور من الفترة السابقة",
+          "payable": "الضريبة المتوجبة الدفع لوزارة المالية", "refund": "طلب استرداد الرصيد الدائن (المادة 30)", "credit_cf": "الرصيد الدائن المدور إلى الفترة التالية"}
+ARABIC_TITLE = "التصريح الدوري عن الضريبة على القيمة المضافة"
 
 
 def quarter_range(year, quarter):
@@ -331,7 +340,7 @@ def reopen_return(db, year, quarter, user_id):
 
 def export_sections(result):
     """The return laid out like the Lebanese periodic VAT declaration, plus supporting schedules."""
-    title = f"VAT Periodic Declaration - Q{result['quarter']} {result['year']}"
+    title = f"VAT Periodic Declaration - Q{result['quarter']} {result['year']} | {ARABIC_TITLE}"
     ratio = Decimal(str(result.get("deduction_ratio", 1)))
     meta = [f"Period: {display_date(result['date_from'])} to {display_date(result['date_to'])}   Due date: {display_date(result['due_date'])}   Currency filter: {result['currency_filter']}",
             f"Partial deduction ratio (Art. 31): {ratio * 100:.2f}% ({result.get('ratio_source', '')})   Status: {result['status']}",
@@ -342,18 +351,18 @@ def export_sections(result):
     no_base = ("adj_output", "adj_input", "net", "prorata", "annual_adjustment", "total_output")
     sections = []
     for code, values in sorted(result["per_currency"].items()):
-        rows = [[number, label, values[key]["base"] if key not in no_base else "", values[key]["vat"] if key not in ("sales_zero", "sales_exempt", "sales_out") else "",
+        rows = [[number, label, ARABIC.get(key, ""), values[key]["base"] if key not in no_base else "", values[key]["vat"] if key not in ("sales_zero", "sales_exempt", "sales_out") else "",
                  values[key]["vat_lbp"] if key not in ("sales_zero", "sales_exempt", "sales_out") else ""] for number, key, label in LINES if key in values]
-        sections.append({"heading": f"Declaration by currency - {code}", "headers": ["Box", "Description", f"Base ({code})", f"VAT ({code})", "VAT (LBP)"],
+        sections.append({"heading": f"Declaration by currency - {code}", "headers": ["Box", "Description", "البيان", f"Base ({code})", f"VAT ({code})", "VAT (LBP)"],
                          "rows": rows, "total_rows": totals_index})
     totals = result["totals_lbp"]
-    summary = [[number, label, totals.get(key, ZERO)] for number, key, label in LINES if key not in ("sales_zero", "sales_exempt", "sales_out")]
-    summary += [["F1", f"Credit brought forward ({result['credit_source']})", result["credit_brought_forward_lbp"]],
-                ["F2", "VAT PAYABLE TO THE MINISTRY OF FINANCE", result["payable_lbp"]],
-                ["F3", "Refund of VAT credit requested (Art. 30)", result.get("refund_requested_lbp", ZERO)],
-                ["F4", "Credit carried forward to the next period", result["credit_carried_forward_lbp"]]]
+    summary = [[number, label, ARABIC.get(key, ""), totals.get(key, ZERO)] for number, key, label in LINES if key not in ("sales_zero", "sales_exempt", "sales_out")]
+    summary += [["F1", f"Credit brought forward ({result['credit_source']})", ARABIC["credit_bf"], result["credit_brought_forward_lbp"]],
+                ["F2", "VAT PAYABLE TO THE MINISTRY OF FINANCE", ARABIC["payable"], result["payable_lbp"]],
+                ["F3", "Refund of VAT credit requested (Art. 30)", ARABIC["refund"], result.get("refund_requested_lbp", ZERO)],
+                ["F4", "Credit carried forward to the next period", ARABIC["credit_cf"], result["credit_carried_forward_lbp"]]]
     labels = [row[1] for row in summary]
-    sections.append({"heading": "Declaration - all currencies in LBP", "headers": ["Box", "Description", "Amount (LBP)"], "rows": summary,
+    sections.append({"heading": "Declaration - all currencies in LBP | التصريح بالليرة اللبنانية", "headers": ["Box", "Description", "البيان", "Amount (LBP)"], "rows": summary,
                      "total_rows": [labels.index(l) for l in ("TOTAL OUTPUT VAT", "TOTAL DEDUCTIBLE VAT", "NET VAT FOR THE PERIOD (B3 - C8)", "VAT PAYABLE TO THE MINISTRY OF FINANCE", "Credit carried forward to the next period")]})
     turnover = result.get("ytd_turnover_lbp", {})
     ratio_rows = [["Taxable and zero-rated turnover (LBP, year to date)", turnover.get("taxable", ZERO)], ["Exempt turnover (LBP, year to date)", turnover.get("exempt", ZERO)],

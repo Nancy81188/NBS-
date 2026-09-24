@@ -449,6 +449,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             except KeyError: return self._json(404,{"error":"Payroll record not found"})
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,{"payroll":result})
+        if path == "/api/payroll/nssf-payment":
+            try: return self._json(201,self.db.record_nssf_payment(body,user["id"]))
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/payroll/apply-lebanese-rules":
             if user["role"]!="admin": return self._json(403,{"error":"Administrator permission required"})
             try: return self._json(200,{"items":self.db.apply_lebanese_payroll_rules(user["id"])})

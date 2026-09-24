@@ -118,7 +118,8 @@ class FinalFeaturesMixin:
         self.pr_report = tk.StringVar(value="R10 - Quarterly withholding"); self.pr_period_type = tk.StringVar(value="Quarterly")
         self.pr_year = tk.StringVar(value=str(getattr(self, "current_fiscal_year", now.year))); self.pr_index = tk.StringVar(value=f"Q{(now.month - 1) // 3 + 1}")
         self.pr_group = tk.StringVar(value="Employees and Managers (separate)"); self.pr_drafts = tk.BooleanVar(value=False)
-        reports = ["R10 - Quarterly withholding", "R5 - Annual employer declaration", "R6 - Individual annual statement"]
+        reports = ["R10 - Quarterly withholding", "R5 - Annual employer declaration", "R6 - Individual annual statement",
+                   "NSSF - Contributions statement (payment)", "CEILINGS - NSSF ceilings by month"]
         tk.Label(controls, text="Report", bg=LIGHT).grid(row=0, column=0, padx=4, sticky="w")
         ttk.Combobox(controls, textvariable=self.pr_report, values=reports, state="readonly", width=31).grid(row=0, column=1, padx=4)
         tk.Label(controls, text="Period", bg=LIGHT).grid(row=0, column=2, padx=4, sticky="w")
@@ -133,6 +134,8 @@ class FinalFeaturesMixin:
         tk.Button(buttons, text="Generate", command=self.generate_payroll_report, bg=GOLD, fg=NAVY, border=0, padx=16, pady=6, font=("Segoe UI", 9, "bold")).pack(side="left", padx=3)
         self.action_button(buttons, "Export Excel", lambda: self.export_payroll_report("xlsx")).pack(side="left", padx=3)
         self.action_button(buttons, "Export PDF", lambda: self.export_payroll_report("pdf")).pack(side="left", padx=3)
+        self.nssf_pay_button = tk.Button(buttons, text="Record NSSF Payment", command=self.record_nssf_payment, bg=GOLD, fg=NAVY, border=0, padx=12, pady=6, font=("Segoe UI", 9, "bold"))
+        self.nssf_pay_button.pack(side="left", padx=3)
         def refresh_index(*_args):
             kind = self.pr_period_type.get()
             if kind == "Monthly":
@@ -180,7 +183,7 @@ class FinalFeaturesMixin:
             tree.insert("", "end", values=[""])
 
     def payroll_report_parameters(self):
-        report = self.pr_report.get().split(" ", 1)[0]
+        report = self.pr_report.get().split(" ", 1)[0].upper()
         period = self.pr_period_type.get().lower()
         try: year = int(self.pr_year.get().strip())
         except ValueError: raise ValueError("Enter the year as four digits, for example 2025")
@@ -200,7 +203,24 @@ class FinalFeaturesMixin:
         note = f"{result['title']}  |  {result['period_label']}  |  {result['record_count']} payroll record(s)"
         if not result["record_count"]:
             note += "  |  No posted payroll in this period. Post payroll records, or tick 'Include draft payroll' to preview."
+        if result.get("report") == "NSSF": note += f"  |  Net payable to the NSSF: {result['net_payable_lbp']:,.0f} LBP"
         self.pr_info.config(text=note, fg=RED if not result["record_count"] else NAVY)
+
+    def record_nssf_payment(self):
+        result = getattr(self, "payroll_report_result", None)
+        if not result or result.get("report") != "NSSF": return messagebox.showwarning("NSSF Payment", "Generate 'NSSF - Contributions statement' for the period first")
+        window = tk.Toplevel(self); window.title("Record NSSF Payment"); window.configure(bg=LIGHT); window.transient(self); window.grab_set()
+        values = {"amount": tk.StringVar(value=f'{result["net_payable_lbp"]:.0f}'), "payment_date": tk.StringVar(value=datetime.now().strftime("%d-%m-%Y") if str(datetime.now().year) == str(getattr(self, "current_fiscal_year", datetime.now().year)) else _display(result["date_to"])),
+                  "cash_account": tk.StringVar(value="531"), "reference": tk.StringVar()}
+        for row, (key, label) in enumerate((("amount", "Amount paid (LBP)"), ("payment_date", "Payment date"), ("cash_account", "Paid from (cash / bank account)"), ("reference", "NSSF receipt number"))):
+            tk.Label(window, text=label, bg=LIGHT).grid(row=row, column=0, sticky="w", padx=10, pady=5)
+            (self.date_entry(window, values[key], 24) if key == "payment_date" else self.account_search_box(window, values[key], 22) if key == "cash_account" else tk.Entry(window, textvariable=values[key], width=26)).grid(row=row, column=1, padx=10, pady=5)
+        def save():
+            try: saved = self.client.record_nssf_payment({**{k: v.get().strip() for k, v in values.items()}, "currency": "LBP", "period_label": result["period_label"]})
+            except Exception as exc: return messagebox.showerror("NSSF Payment", str(exc), parent=window)
+            window.destroy(); messagebox.showinfo("NSSF Payment", f'Payment voucher {saved["voucher"]} saved: Dr NSSF payable / Cr cash {saved["amount"]:,.0f} LBP')
+            self.load_journal(); self.load_trial()
+        self.action_button(window, "Save Payment", save).grid(row=4, column=0, columnspan=2, pady=10)
 
     def export_payroll_report(self, format_name):
         result = getattr(self, "payroll_report_result", None)
@@ -279,7 +299,7 @@ class FinalFeaturesMixin:
         nested = ttk.Notebook(page); nested.pack(fill="both", expand=True, padx=10, pady=8)
         summary = tk.Frame(nested, bg=LIGHT); documents = tk.Frame(nested, bg=LIGHT); adjustments = tk.Frame(nested, bg=LIGHT); history = tk.Frame(nested, bg=LIGHT)
         nested.add(summary, text="VAT Return"); nested.add(documents, text="Supporting Documents"); nested.add(adjustments, text="Manual Adjustments"); nested.add(history, text="Saved Returns")
-        self.vat_summary_tree = self.report_viewer(summary, [60, 470, 140, 140, 150])
+        self.vat_summary_tree = self.report_viewer(summary, [55, 390, 330, 115, 115, 125])
         self.vat_documents_tree = self.table(documents, [("date", "Date", 90), ("number", "Document", 120), ("party", "Customer / Supplier", 200), ("category", "Category", 140),
             ("deductible", "Deductible", 80), ("currency", "Currency", 70), ("base", "Base", 110), ("vat", "VAT", 100), ("rate", "LBP Rate", 90), ("vat_lbp", "VAT (LBP)", 120), ("status", "Status", 75)])
         form = tk.Frame(adjustments, bg=LIGHT); form.pack(fill="x", padx=10, pady=8)

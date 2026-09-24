@@ -15,6 +15,68 @@ from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Tabl
 
 NAVY = "071B2E"
 
+# ---------------------------------------------------------------- Arabic in PDF
+# Amiri (SIL Open Font License, assets/fonts/Amiri-OFL.txt) is used for any text that contains Arabic.
+import re as _re
+import sys as _sys
+from pathlib import Path as _Path
+from xml.sax.saxutils import escape as _escape
+
+_ARABIC = _re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]")
+_FONTS = {"ready": None}
+
+
+def _font_folder():
+    base = _Path(getattr(_sys, "_MEIPASS", _Path(__file__).resolve().parent))
+    return base / "assets" / "fonts"
+
+
+def arabic_fonts():
+    """Register Amiri once; returns (regular, bold) or (None, None) when the font files are missing."""
+    if _FONTS["ready"] is None:
+        try:
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            folder = _font_folder()
+            pdfmetrics.registerFont(TTFont("Amiri", str(folder / "Amiri-Regular.ttf")))
+            pdfmetrics.registerFont(TTFont("Amiri-Bold", str(folder / "Amiri-Bold.ttf")))
+            _FONTS["ready"] = ("Amiri", "Amiri-Bold")
+        except Exception:
+            _FONTS["ready"] = (None, None)
+    return _FONTS["ready"]
+
+
+def has_arabic(text):
+    return bool(_ARABIC.search(str(text or "")))
+
+
+def shape_arabic(text):
+    """Join the Arabic letters and put the line in visual (right-to-left) order for the PDF."""
+    text = str(text or "")
+    if not has_arabic(text): return text
+    try:
+        import arabic_reshaper
+        shaped = arabic_reshaper.reshape(text)
+    except Exception:
+        shaped = text
+    try:
+        from bidi.algorithm import get_display
+        return get_display(shaped)
+    except Exception:
+        return " ".join(reversed(shaped.split(" ")))
+
+
+def pdf_paragraph(text, style, bold=False):
+    """A Paragraph that renders Arabic with the Arabic font, and anything else with the style's font."""
+    regular, bold_font = arabic_fonts()
+    if has_arabic(text) and regular:
+        from reportlab.lib.styles import ParagraphStyle
+        size = style.fontSize * 1.2
+        arabic_style = ParagraphStyle(f"ar-{style.name}-{bold}", parent=style, fontName=bold_font if bold else regular, fontSize=size, leading=size * 1.4,
+                                      alignment=2 if not _re.search(r"[A-Za-z]{3}", str(text)) else style.alignment)
+        return Paragraph(_escape(shape_arabic(text)), arabic_style)
+    return Paragraph(_escape(str(text or "")), style)
+
 def export_excel(path, title, headers, rows):
     wb = Workbook(); ws = wb.active; ws.title = title[:31]
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
@@ -35,8 +97,12 @@ def export_excel(path, title, headers, rows):
 def export_pdf(path, title, headers, rows):
     doc = SimpleDocTemplate(str(path), pagesize=landscape(A4), rightMargin=10*mm, leftMargin=10*mm, topMargin=10*mm, bottomMargin=10*mm)
     styles = getSampleStyleSheet()
-    story = [Paragraph(title, styles["Title"]), Paragraph(f"Generated: {datetime.now():%d-%m-%Y %H:%M}", styles["Normal"]), Spacer(1, 6*mm)]
-    data = [headers] + [["" if value is None else str(value) for value in row] for row in rows]
+    from reportlab.lib.styles import ParagraphStyle
+    story = [pdf_paragraph(title, styles["Title"], True), Paragraph(f"Generated: {datetime.now():%d-%m-%Y %H:%M}", styles["Normal"]), Spacer(1, 6*mm)]
+    cell = ParagraphStyle("plain-cell", parent=styles["Normal"], fontSize=7, leading=8.5)
+    head = ParagraphStyle("plain-head", parent=cell, fontName="Helvetica-Bold", textColor=colors.white)
+    data = [[pdf_paragraph(h, head, True) if has_arabic(h) else h for h in headers]] + \
+           [[pdf_paragraph(value, cell) if has_arabic(value) else ("" if value is None else str(value)) for value in row] for row in rows]
     table = Table(data, repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#071B2E")), ("TEXTCOLOR", (0,0), (-1,0), colors.white),
@@ -62,17 +128,19 @@ def export_invoice_pdf(path, invoice, items, logo_path=None, company=None):
     company=company or {}; company_name=company.get("company_name") or "SABER FOR AUDIT"
     company_line=" | ".join(value for value in (company.get("company_address") or "Zouk Mosbeh, Keserwan, Lebanon",company.get("company_phone") or "+961 70 636729",company.get("company_email") or "bassam.saber@saberforaudit.com",company.get("company_website") or "saberforaudit.com",("MOF: "+company["company_mof"]) if company.get("company_mof") else "") if value)
     story.extend([
-        Paragraph(company_name.upper(),styles["Title"]),
+        pdf_paragraph(company_name if has_arabic(company_name) else company_name.upper(),styles["Title"],True),
         Paragraph("Accounting & Management Consulting",styles["Heading3"]),
-        Paragraph(company_line,styles["Normal"]),
+        pdf_paragraph(company_line,styles["Normal"]),
         Spacer(1,6*mm),
         Paragraph(f'{invoice["kind"].title()} Invoice {invoice["invoice_number"]}',styles["Heading1"]),
         Paragraph(f'Date: {invoice["invoice_date"]} &nbsp;&nbsp; Due: {invoice.get("due_date") or "-"} &nbsp;&nbsp; Currency: {invoice["currency"]}',styles["Normal"]),
-        Paragraph(f'Customer / Supplier: {invoice["party_name"]} &nbsp;&nbsp; Payment: {invoice.get("payment_status","unpaid").title()}',styles["Normal"]),
+        pdf_paragraph(f'Customer / Supplier: {invoice["party_name"]}',styles["Normal"]),
+        Paragraph(f'Payment: {invoice.get("payment_status","unpaid").title()}',styles["Normal"]),
         Spacer(1,6*mm),
     ])
     headers=["Description","Qty","Unit Price","Before VAT","VAT %","VAT","Total"]
-    rows=[[x["description"],x["quantity"],x["unit_price"],x["subtotal"],x["vat_rate"],x["vat"],x["total"]] for x in items]
+    description_style=styles["Normal"].clone("invoice-description",fontSize=8,leading=10)
+    rows=[[pdf_paragraph(x["description"],description_style),x["quantity"],x["unit_price"],x["subtotal"],x["vat_rate"],x["vat"],x["total"]] for x in items]
     if not rows: rows=[["Invoice total","1",invoice["subtotal"],invoice["subtotal"],"",invoice["vat"],invoice["total"]]]
     table=Table([headers]+rows,repeatRows=1,colWidths=[65*mm,14*mm,23*mm,25*mm,16*mm,22*mm,24*mm])
     table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#071B2E")),("TEXTCOLOR",(0,0),(-1,0),colors.white),
@@ -149,22 +217,29 @@ def export_sections_pdf(path, title, meta, sections):
     styles = getSampleStyleSheet()
     header_style = ParagraphStyle("header", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=6.5, leading=7.5, textColor=colors.white, alignment=1)
     cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=6.5, leading=7.5)
-    story = [Paragraph(title, styles["Title"])]
-    for line in list(meta or []) + [f"Generated: {datetime.now():%d-%m-%Y %H:%M}"]: story.append(Paragraph(line, styles["Normal"]))
+    story = [pdf_paragraph(title, styles["Title"], True)]
+    for line in list(meta or []) + [f"Generated: {datetime.now():%d-%m-%Y %H:%M}"]: story.append(pdf_paragraph(line, styles["Normal"]))
     story.append(Spacer(1, 4*mm))
     available = page[0] - 16*mm
     for section in sections:
-        story.append(Paragraph(section["heading"], styles["Heading3"]))
+        story.append(pdf_paragraph(section["heading"], styles["Heading3"], True))
         headers = section["headers"]; count = len(headers)
         body = [[_formatted(value) for value in list(values) + [""] * (count - len(values))] for values in section["rows"]]
         weights = []
+        def header_length(text):
+            parts = [p.strip() for p in str(text).split(" | ")]
+            return max(len(p) * (0.8 if has_arabic(p) else 1) for p in parts) * (0.75 if len(parts) > 1 else 1)
         for column in range(count):
-            longest = max([len(str(headers[column]))] + [len(row[column]) for row in body] or [6])
-            weights.append(min(max(longest, 5), 32))
+            longest = max([header_length(headers[column])] + [len(row[column]) * (1.15 if has_arabic(row[column]) else 1) for row in body] or [6])
+            weights.append(min(max(longest, 7), 30))
         scale = available / sum(weights); col_widths = [w * scale for w in weights]
-        data = [[Paragraph(str(h), header_style) for h in headers]]
+        def header_cell(text):
+            parts = [p.strip() for p in str(text).split(" | ")]
+            if len(parts) == 1: return pdf_paragraph(parts[0], header_style, True)
+            return [pdf_paragraph(p, header_style, True) for p in parts]  # English above, Arabic below
+        data = [[header_cell(h) for h in headers]]
         for row in body:
-            data.append([Paragraph(value, cell_style) if len(value) > 18 and not value.replace(",", "").replace(".", "").replace("-", "").isdigit() else value for value in row])
+            data.append([pdf_paragraph(value, cell_style) if has_arabic(value) or (len(value) > 18 and not value.replace(",", "").replace(".", "").replace("-", "").isdigit()) else value for value in row])
         table = Table(data, repeatRows=1, colWidths=col_widths)
         style = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#071B2E")), ("FONTSIZE", (0, 1), (-1, -1), 6.5),
                  ("GRID", (0, 0), (-1, -1), .25, colors.grey), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -180,6 +255,7 @@ def export_sections_pdf(path, title, meta, sections):
 
     def footer(canvas, document):
         canvas.saveState(); canvas.setFont("Helvetica", 7); canvas.setFillColor(colors.HexColor("#5F6B76"))
-        canvas.drawString(8*mm, 6*mm, title); canvas.drawRightString(page[0] - 8*mm, 6*mm, f"Page {document.page}")
+        footer_title = title.split(" | ")[0] if has_arabic(title) else title
+        canvas.drawString(8*mm, 6*mm, footer_title); canvas.drawRightString(page[0] - 8*mm, 6*mm, f"Page {document.page}")
         canvas.restoreState()
     doc.build(story, onFirstPage=footer, onLaterPages=footer)

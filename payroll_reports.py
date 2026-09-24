@@ -12,9 +12,9 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 REPORTS = {
-    "R10": "R10 - Quarterly Salary Tax Withholding Return",
-    "R5": "R5 - Annual Salary Tax Declaration (Employer Summary)",
-    "R6": "R6 - Individual Annual Salary Statement",
+    "R10": "R10 - Quarterly Salary Tax Withholding Return | التصريح الفصلي عن الضريبة المقتطعة على الرواتب والأجور",
+    "R5": "R5 - Annual Salary Tax Declaration (Employer Summary) | التصريح السنوي عن الرواتب والأجور",
+    "R6": "R6 - Individual Annual Salary Statement | البيان الإفرادي السنوي للأجير",
 }
 PERIOD_TYPES = ("monthly", "quarterly", "yearly")
 GROUPS = {"employee": "Employees", "manager": "Managers"}
@@ -186,7 +186,9 @@ def _r6_sections(label, records, employee_label):
 
 def build_payroll_report(db, report="R10", period_type="quarterly", year=None, index=1, group="both", include_drafts=False):
     report = str(report or "R10").upper()
-    if report not in REPORTS: raise ValueError("Report must be R5, R6 or R10")
+    if report == "NSSF": return build_nssf_statement(db, period_type, year, index, include_drafts)
+    if report == "CEILINGS": return build_ceilings_by_month(db, year or date.today().year)
+    if report not in REPORTS: raise ValueError("Report must be R5, R6, R10, NSSF or CEILINGS")
     start, end, label = period_range(period_type, year or date.today().year, index)
     records = _load_records(db, start, end, bool(include_drafts))
     settings_section, settings_rows = _settings_section(db, start, end)
@@ -229,3 +231,79 @@ def json_ready(result):
         if isinstance(value, dict): return {k: convert(v) for k, v in value.items()}
         return value
     return convert(result)
+
+
+# ---------------------------------------------------------------- NSSF contributions statement (payment)
+NSSF_TITLE = "NSSF Contributions Statement | بيان الاشتراكات المتوجبة للصندوق الوطني للضمان الاجتماعي"
+
+
+def _month_end(iso):
+    year, month = int(iso[:4]), int(iso[5:7])
+    return f"{year}-{month:02d}-{calendar.monthrange(year, month)[1]:02d}"
+
+
+def build_nssf_statement(db, period_type="monthly", year=None, index=1, include_drafts=False):
+    """Per employee: salary subject to NSSF, capped bases and contributions by branch (sickness & maternity
+    employee + employer, family allowances, end of service), NSSF family allowances already paid, and the
+    net amount to pay to the NSSF. Bases are the ones of each payroll month (monthly ceilings)."""
+    start, end, label = period_range(period_type, year or date.today().year, index)
+    records = _load_records(db, start, end, bool(include_drafts)); company = db.settings()
+    rows = []; totals = {k: ZERO for k in ("salary", "sick_base", "employee", "employer_sick", "family_base", "family", "eos_base", "eos", "total", "allowance", "net")}
+    rates_seen = {}
+    for row in records:
+        settings = db.payroll_settings_for(_month_end(row["period_date"])); lbp = row["lbp"]
+        rate = lambda name: Decimal(str(settings.get(name) or 0))
+        allowance = _lbp(Decimal(str(row.get("family_allowance") or 0)) * row["lbp_rate"])
+        subject = lbp["nssf_base"]
+        if Decimal(str(row.get("retro_salary") or 0)):
+            # retroactive pay uses the ceilings of its own months: take the bases from the saved contributions
+            base = lambda amount, name: _lbp(amount / rate(name)) if rate(name) else ZERO
+            values = {"salary": subject, "sick_base": base(lbp["employee_nssf"], "employee_nssf_rate"), "employee": lbp["employee_nssf"],
+                      "employer_sick": lbp["employer_medical"], "family_base": base(lbp["employer_family"], "family_rate"), "family": lbp["employer_family"],
+                      "eos_base": base(lbp["employer_end_service"], "end_service_rate"), "eos": lbp["employer_end_service"], "allowance": allowance}
+        else:
+            # contributions are paid in LBP: capped base of the month x rate, computed directly in LBP
+            capped = lambda ceiling: min(subject, Decimal(str(settings.get(ceiling) or 0))) if Decimal(str(settings.get(ceiling) or 0)) > 0 else subject
+            sick = capped("medical_ceiling"); employee_base = capped("employee_ceiling"); family = capped("family_ceiling"); eos = capped("end_service_ceiling")
+            values = {"salary": subject, "sick_base": sick, "employee": _lbp(employee_base * rate("employee_nssf_rate")), "employer_sick": _lbp(sick * rate("medical_rate")),
+                      "family_base": family, "family": _lbp(family * rate("family_rate")), "eos_base": eos, "eos": _lbp(eos * rate("end_service_rate")), "allowance": allowance}
+        values["total"] = values["employee"] + values["employer_sick"] + values["family"] + values["eos"]; values["net"] = values["total"] - allowance
+        for key, value in values.items(): totals[key] += value
+        rates_seen[_month_end(row["period_date"])[:7]] = (settings.get("medical_ceiling"), settings.get("family_ceiling"), settings.get("employee_nssf_rate"), settings.get("medical_rate"),
+                                                          settings.get("family_rate"), settings.get("end_service_rate"))
+        rows.append([row.get("nssf_number") or "-", row["full_name"], row["period_date"][5:7] + "-" + row["period_date"][:4]] + [values[k] for k in
+                    ("salary", "sick_base", "employee", "employer_sick", "family_base", "family", "eos_base", "eos", "total", "allowance", "net")])
+    rows.sort(key=lambda r: (r[1], r[2][3:] + r[2][:2]))
+    rows.append(["TOTAL | المجموع", f"{len({r[1] for r in rows})} employee(s)", ""] + [totals[k] for k in ("salary", "sick_base", "employee", "employer_sick", "family_base", "family", "eos_base", "eos", "total", "allowance", "net")])
+    headers = ["NSSF No. | رقم الضمان", "Employee | الأجير", "Month | الشهر", "Salary subject | الأجر الخاضع", "Sickness base | أساس المرض", "Employee 3% | حصة الأجير",
+               "Employer 8% | صاحب العمل", "Family base | أساس العائلية", "Family 6% | العائلية", "EOS base | أساس نهاية الخدمة", "EOS 8.5% | نهاية الخدمة",
+               "Total | المجموع", "Allowances | تعويضات مدفوعة", "Net due | الصافي"]
+    summary = [["Sickness & maternity - employee share", "المرض والأمومة - حصة الأجير", totals["employee"]],
+               ["Sickness & maternity - employer share", "المرض والأمومة - حصة صاحب العمل", totals["employer_sick"]],
+               ["Family allowances branch", "فرع التعويضات العائلية", totals["family"]],
+               ["End-of-service indemnity branch", "فرع تعويض نهاية الخدمة", totals["eos"]],
+               ["TOTAL CONTRIBUTIONS", "مجموع الاشتراكات", totals["total"]],
+               ["Less: family allowances paid to employees on behalf of the NSSF", "ينزل: التعويضات العائلية المدفوعة عن الصندوق", totals["allowance"]],
+               ["NET AMOUNT PAYABLE TO THE NSSF (LBP)", "الصافي المتوجب دفعه للصندوق (ل.ل.)", totals["net"]]]
+    ceilings = [[month[5:] + "-" + month[:4], _ceiling_text(v[0]), _ceiling_text(v[1]), _rate_text(v[2]), _rate_text(v[3]), _rate_text(v[4]), _rate_text(v[5])] for month, v in sorted(rates_seen.items())]
+    sections = [{"heading": f"Employees - {label} | الأجراء", "headers": headers, "rows": rows if len(rows) > 1 else [["No payroll in this period"] + [""] * 13], "total_rows": [len(rows) - 1] if len(rows) > 1 else []},
+                {"heading": "Payment summary | خلاصة الدفع", "headers": ["Branch", "الفرع", "Amount (LBP)"], "rows": summary, "total_rows": [4, 6]},
+                {"heading": "Monthly ceilings and rates applied | السقوف والنسب المعتمدة شهرياً", "headers": ["Month", "Sickness ceiling", "Family ceiling", "Employee", "Employer sickness", "Family", "End of service"],
+                 "rows": ceilings or [["-"] * 7], "total_rows": []}]
+    meta = [f"Employer: {company.get('company_name') or '-'}   Employer NSSF No.: {company.get('company_nssf') or '-'}   MOF No.: {company.get('company_mof') or '-'}",
+            f"Period: {label} ({_display(start)} to {_display(end)})   Amounts in LBP   Source: " + ("posted and draft payroll" if include_drafts else "posted payroll")]
+    return {"report": "NSSF", "title": NSSF_TITLE, "period_label": label, "date_from": start, "date_to": end, "meta": meta, "sections": sections,
+            "record_count": len(records), "net_payable_lbp": totals["net"], "summary": {k: v for k, v in totals.items()}}
+
+
+def build_ceilings_by_month(db, year):
+    """The NSSF ceilings and rates of every month of a year (as used by payroll: the rules on the last day of the month)."""
+    year = int(year); rows = []
+    for month in range(1, 13):
+        day = f"{year}-{month:02d}-{calendar.monthrange(year, month)[1]:02d}"; s = db.payroll_settings_for(day)
+        rows.append([f"{calendar.month_name[month]} {year}", _ceiling_text(s.get("employee_ceiling")), _ceiling_text(s.get("medical_ceiling")), _ceiling_text(s.get("family_ceiling")),
+                     _rate_text(s.get("employee_nssf_rate")), _rate_text(s.get("medical_rate")), _rate_text(s.get("family_rate")), _rate_text(s.get("end_service_rate")),
+                     _ceiling_text(s.get("tax_rounding")) if Decimal(str(s.get("tax_rounding") or 0)) else "-", _display(s.get("date_from"))])
+    headers = ["Month | الشهر", "Employee ceiling", "Sickness & maternity ceiling", "Family allowances ceiling", "Employee", "Employer sickness", "Family", "End of service", "Tax rounding", "Rules from"]
+    return {"report": "CEILINGS", "title": f"NSSF Ceilings by Month {year} | سقوف الضمان الاجتماعي الشهرية", "period_label": str(year), "meta": ["Monthly ceilings in LBP (the rules in force on the last day of each month)"],
+            "sections": [{"heading": f"Year {year}", "headers": headers, "rows": rows, "total_rows": []}], "record_count": 12, "summary": {}}

@@ -1818,12 +1818,12 @@ class SaberApp(InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScreensMixin,
         self.action_button(branch_controls,"Save Branch",self.save_branch).pack(side="left",padx=4)
         self.branches_tree=self.table(branches,[("id","ID",80),("name","Branch Name",320),("active","Active",90)])
         self.base_currency=tk.StringVar(value="USD"); self.backup_hours=tk.StringVar(value="24")
-        self.company_fields={key:tk.StringVar() for key in ("company_name","company_address","company_phone","company_mof","company_email","company_website","company_logo")}
+        self.company_fields={key:tk.StringVar() for key in ("company_name","company_address","company_phone","company_mof","company_nssf","company_email","company_website","company_logo")}
         tk.Label(general,text="Base Currency",bg=LIGHT).grid(row=0,column=0,padx=14,pady=14,sticky="w")
         ttk.Combobox(general,textvariable=self.base_currency,values=["USD","EUR","LBP","AED"],state="readonly",width=15).grid(row=0,column=1,padx=14,pady=14)
         tk.Label(general,text="Automatic backup every (hours)",bg=LIGHT).grid(row=1,column=0,padx=14,pady=14,sticky="w")
         tk.Entry(general,textvariable=self.backup_hours,width=18).grid(row=1,column=1,padx=14,pady=14)
-        for row,(key,label) in enumerate((("company_name","Company Name"),("company_address","Address"),("company_phone","Phone"),("company_mof","MOF / VAT Number"),("company_email","Email"),("company_website","Website"),("company_logo","Logo File Path")),2):
+        for row,(key,label) in enumerate((("company_name","Company Name"),("company_address","Address"),("company_phone","Phone"),("company_mof","MOF / VAT Number"),("company_nssf","NSSF Employer Number"),("company_email","Email"),("company_website","Website"),("company_logo","Logo File Path")),2):
             tk.Label(general,text=label,bg=LIGHT).grid(row=row,column=0,padx=14,pady=7,sticky="w")
             tk.Entry(general,textvariable=self.company_fields[key],width=42).grid(row=row,column=1,padx=14,pady=7,sticky="w")
         self.action_button(general,"Save Settings",self.save_general_settings).grid(row=9,column=0,columnspan=2,pady=14)

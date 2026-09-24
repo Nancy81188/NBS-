@@ -231,4 +231,5 @@ class ApiClient:
     def next_stock_number(self,doc_type,date): return self.request("GET","/api/inventory/next-number?"+urlencode({"type":doc_type,"date":date}))["number"]
     def inventory_report(self,report,options): return self.request("GET","/api/inventory/report?"+urlencode({"report":report,"options":json.dumps(options)}))
     def post_stock_variation(self,year): return self.request("POST","/api/inventory/stock-variation",{"year":year})
+    def record_nssf_payment(self,item): return self.request("POST","/api/payroll/nssf-payment",item)
 
