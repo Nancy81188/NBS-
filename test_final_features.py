@@ -31,7 +31,7 @@ def cell(section, row, header):
 
 class PayrollOfficialReportsTest(unittest.TestCase):
     def setUp(self):
-        self.folder = tempfile.TemporaryDirectory(); self.db, self.user = new_db(self.folder.name)
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
         db, user = self.db, self.user
         self.employee = db.save_employee({"employee_number": "1000", "full_name": "Rami Employee", "currency": "LBP", "base_salary": "60000000",
             "marital_status": "married", "children": 2, "mof_number": "MOF-1", "nssf_number": "NSSF-1"}, user)
@@ -108,7 +108,7 @@ class PayrollOfficialReportsTest(unittest.TestCase):
 
 class QuarterlyVatTest(unittest.TestCase):
     def setUp(self):
-        self.folder = tempfile.TemporaryDirectory(); self.db, self.user = new_db(self.folder.name)
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
         db, user = self.db, self.user
         db.save_exchange_rate({"date_from": "01-01-2025", "date_to": "31-12-2025", "from_currency": "USD", "to_currency": "LBP", "rate": "89500"}, user)
         def invoice(date, party, kind, currency, amount, status="posted"):
@@ -169,7 +169,7 @@ class QuarterlyVatTest(unittest.TestCase):
         self.assertEqual(vat_return.build_vat_return(self.db, 2025, 1)["status"], "not saved")
 
     def test_previous_fiscal_year_file_provides_q1_credit(self):
-        other = tempfile.TemporaryDirectory(); previous, user = new_db(other.name, "2024.db")
+        other = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); previous, user = new_db(other.name, "2024.db")
         previous.create_manual_invoice({"invoice_date": "10-11-2024", "party_name": "Supplier", "kind": "purchases", "currency": "LBP", "status": "posted"},
                                        [{"description": "Stock", "quantity": 1, "unit_price": 100000000, "vat_rate": 11}], user)
         vat_return.save_return(previous, 2024, 4, user)
@@ -189,7 +189,7 @@ class QuarterlyVatTest(unittest.TestCase):
 
 class UsersAlertsAndRatesTest(unittest.TestCase):
     def setUp(self):
-        self.folder = tempfile.TemporaryDirectory(); self.db, self.user = new_db(self.folder.name)
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
 
     def tearDown(self): self.folder.cleanup()
 
@@ -239,7 +239,7 @@ class StandaloneEndToEndTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.folder = tempfile.TemporaryDirectory(); cls.database = Path(cls.folder.name) / "SaberAccounting" / "saber.db"
+        cls.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); cls.database = Path(cls.folder.name) / "SaberAccounting" / "saber.db"
         cls.database.parent.mkdir(parents=True)
         probe = socket.socket(); probe.bind(("127.0.0.1", 0)); cls.port = probe.getsockname()[1]; probe.close()
         threading.Thread(target=run_server, kwargs={"host": "127.0.0.1", "port": cls.port, "database": str(cls.database), "admin_password": "admin123"}, daemon=True).start()
@@ -286,8 +286,9 @@ class StandaloneEndToEndTest(unittest.TestCase):
         self.assertEqual(api.payroll_report("R10", "quarterly", year, 1, "employee")["record_count"], 3)
         bad = Path(backup).parent / "saber_accounting_broken.db"; bad.write_bytes(b"not a database")
         with self.assertRaisesRegex(RuntimeError, "not a valid"): api.restore_backup(bad.name)
-        with sqlite3.connect(str(self.database)) as connection:
-            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        connection = sqlite3.connect(str(self.database))
+        try: self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        finally: connection.close()
 
 
 if __name__ == "__main__": unittest.main()

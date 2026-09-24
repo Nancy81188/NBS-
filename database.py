@@ -540,7 +540,7 @@ class Database:
     @staticmethod
     def _validate_backup_file(path):
         try:
-            connection=sqlite3.connect(f"file:{path}?mode=ro",uri=True)
+            connection=sqlite3.connect(Path(path).resolve().as_uri()+"?mode=ro",uri=True)
             try:
                 if connection.execute("PRAGMA integrity_check").fetchone()[0]!="ok": raise ValueError("Backup file is damaged")
                 tables={row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
