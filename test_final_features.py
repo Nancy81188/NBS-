@@ -303,6 +303,58 @@ class BrainsStyleVoucherAndReportsTest(unittest.TestCase):
         self.assertEqual(rows[0][2], "Opening balance (carried forward)"); self.assertEqual(float(rows[0][-2]), 200)  # credit opening
         self.assertEqual(float(rows[-1][-1]), -150); self.assertEqual(statement["title"], "Statement of Account")
 
+class DepartmentsProjectsBudgetTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
+        db, user = self.db, self.user
+        self.d1 = db.save_department({"name": "Sales"}, user); self.d2 = db.save_department({"name": "Site Works"}, user)
+        db.save_party({"kind": "customer", "name": "Tower Client", "account_category": "client"}, user)
+        self.project = db.save_project({"name": "Tower Fit-out", "party_name": "Tower Client", "start_date": "01012025"}, user)
+        db.add_expense({"expense_date": "10-02-2025", "description": "Paint", "currency": "USD", "with_vat_subtotal": "300", "vat": "0", "department": "D02", "project": self.project["code"]}, user)
+        db.add_expense({"expense_date": "12-02-2025", "description": "Paper", "currency": "USD", "with_vat_subtotal": "50", "vat": "0", "department": "D01"}, user)
+        db.create_manual_invoice({"invoice_date": "20-02-2025", "party_name": "Tower Client", "kind": "sales", "currency": "USD", "status": "posted",
+                                  "department": "D02", "project": self.project["code"], "expense_account": "713100000"}, [{"description": "Works", "quantity": 1, "unit_price": 1000}], user)
+        db.save_journal_voucher({"entry_date": "25-02-2025", "description": "Site cost", "currency": "USD"}, [
+            {"account_code": "601100000", "side": "D", "amount": "40", "department": "D02", "project": self.project["code"]}, {"account_code": "531", "side": "C", "amount": "40"}], user)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def test_codes_validation_and_voucher_dimensions(self):
+        self.assertEqual((self.d1["code"], self.d2["code"], self.project["code"]), ("D01", "D02", "P2025-001"))
+        self.assertEqual(self.project["party_name"], "Tower Client")
+        with self.assertRaisesRegex(ValueError, "already used"): self.db.save_department({"code": "D01", "name": "Other"}, self.user)
+        with self.assertRaisesRegex(ValueError, "not found"):
+            self.db.save_journal_voucher({"entry_date": "25-02-2025", "description": "x", "currency": "USD"}, [
+                {"account_code": "531", "side": "D", "amount": "1", "department": "ZZ"}, {"account_code": "531", "side": "C", "amount": "1"}], self.user)
+        voucher = [v for v in self.db.journal() if v["source_type"] == "journal_voucher"][0]
+        lines = self.db.journal_voucher_detail(voucher["entry_id"])["lines"]
+        self.assertEqual((lines[0]["department"], lines[0]["project"], lines[1]["department"]), ("D02", "P2025-001", None))
+
+    def test_filters_and_split_by_department_or_project(self):
+        project_only = ledger_reports.build_account_report(self.db, {"project_id": self.project["id"], "profit_loss_only": True, "first_column": "USD", "second_column": "none"})
+        rows = {r[0]: r for r in project_only["sections"][0]["rows"]}
+        self.assertEqual(float(rows["601100000"][-1]), 340); self.assertEqual(float(rows["713100000"][-1]), -1000)
+        split = ledger_reports.build_account_report(self.db, {"split_by_department": True, "profit_loss_only": True, "first_column": "USD", "second_column": "none"})
+        self.assertEqual(len(split["sections"]), 2); self.assertIn("D01 Sales", split["sections"][0]["heading"])
+        detail = ledger_reports.build_account_report(self.db, {"detailed": True, "with_department": True, "account_from": "601100000", "account_to": "601100000", "first_column": "USD", "second_column": "none"})
+        self.assertIn("Department", detail["sections"][0]["headers"])
+
+    def test_budget_monthly_annual_parent_and_dimension_budgets(self):
+        self.db.save_budget({"year": 2025, "currency": "USD", "lines": [{"account_code": "601100000", "annual": "2400"}, {"account_code": "713", "months": [0, 1200] + [0] * 10}]}, self.user)
+        self.db.save_budget({"year": 2025, "currency": "USD", "project": self.project["code"], "lines": [{"account_code": "601100000", "annual": "1200"}]}, self.user)
+        self.assertEqual(self.db.list_budgets(2025)[1]["months"][1], 1200)
+        report = ledger_reports.build_account_report(self.db, {"date_from": "01-02-2025", "date_to": "28-02-2025", "budget": True, "carry_forward": False,
+                                                               "profit_loss_only": True, "first_column": "USD", "second_column": "none"})
+        rows = {r[0]: r for r in report["sections"][0]["rows"]}
+        self.assertEqual([float(x) for x in rows["601100000"][-4:-1]], [200, 390, 190])
+        self.assertEqual([float(x) for x in rows["713"][-4:-1]], [1200, 1000, -200]); self.assertEqual(rows["713"][-1], "83.3%")
+        project = ledger_reports.build_account_report(self.db, {"date_from": "01-01-2025", "date_to": "31-12-2025", "budget": True, "carry_forward": False, "profit_loss_only": True,
+                                                                "project_id": self.project["id"], "first_column": "USD", "second_column": "none"})
+        rows = {r[0]: r for r in project["sections"][0]["rows"]}
+        self.assertEqual([float(x) for x in rows["601100000"][-4:-1]], [1200, 340, -860])
+        with self.assertRaisesRegex(ValueError, "Date From and Date To"): ledger_reports.build_account_report(self.db, {"budget": True})
+        with self.assertRaisesRegex(ValueError, "negative"): self.db.save_budget({"year": 2025, "currency": "USD", "lines": [{"account_code": "531", "annual": "-5"}]}, self.user)
+
 class StandaloneEndToEndTest(unittest.TestCase):
     """Runs the embedded data service exactly as the installed app does and drives it through the API."""
 

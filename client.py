@@ -193,3 +193,11 @@ class ApiClient:
     def invoice_items(self,invoice_id): return self.request("GET",f"/api/invoices/{invoice_id}/items")["items"]
     def account_report(self,options): return self.request("GET","/api/reports/accounts?"+urlencode({"options":json.dumps(options)}))
     def suggested_rates(self,currency,date=None): return self.request("GET","/api/rates/suggest?"+urlencode({k:v for k,v in {"currency":currency,"date":date}.items() if v}))
+    def departments(self): return self.request("GET","/api/departments")["items"]
+    def save_department(self,item): return self.request("POST","/api/departments",item)["item"]
+    def projects(self): return self.request("GET","/api/projects")["items"]
+    def save_project(self,item): return self.request("POST","/api/projects",item)["item"]
+    def budgets(self,year,currency="USD",department=None,project=None):
+        return self.request("GET","/api/budgets?"+urlencode({k:v for k,v in {"year":year,"currency":currency,"department":department,"project":project}.items() if v}))["items"]
+    def save_budget(self,item): return self.request("POST","/api/budgets",item)["item"]
+

@@ -90,7 +90,15 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/api/reports/accounts":
             try:
                 options=json.loads(self._query(parsed,"options","{}") or "{}")
+                with self.db.connect() as connection:
+                    department_id,project_id=self.db._dimension_ids(connection,{"department":options.get("department"),"project":options.get("project")})
+                options["department_id"]=department_id; options["project_id"]=project_id
                 return self._json(200,ledger_reports.json_ready(ledger_reports.build_account_report(self.db,options)))
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path == "/api/departments": return self._json(200,{"items":self.db.list_departments()})
+        if path == "/api/projects": return self._json(200,{"items":self.db.list_projects()})
+        if path == "/api/budgets":
+            try: return self._json(200,{"items":self.db.list_budgets(self._query(parsed,"year"),self._query(parsed,"currency","USD"),self._query(parsed,"department"),self._query(parsed,"project"))})
             except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/rates/suggest":
             try:
@@ -289,6 +297,11 @@ class ApiHandler(BaseHTTPRequestHandler):
         if user["role"] == "viewer":
             return self._json(403,{"error":"Viewer access is read-only"})
         if self._module_denied(user, path): return
+        if path in ("/api/departments","/api/projects","/api/budgets"):
+            try:
+                saver={"/api/departments":self.db.save_department,"/api/projects":self.db.save_project,"/api/budgets":self.db.save_budget}[path]
+                return self._json(201,{"item":saver(body,user["id"])})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/vat-return/adjustments":
             try: adjustment_id=vat_return.add_adjustment(self.db,body,user["id"],user["username"])
             except Exception as exc: return self._json(400,{"error":str(exc)})

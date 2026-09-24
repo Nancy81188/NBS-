@@ -16,6 +16,7 @@ from importer import read_invoices
 from report_export import export_excel, export_invoice_pdf, export_pdf, print_rows
 from desktop_final import FinalFeaturesMixin
 from desktop_brains import BrainsScreensMixin
+from desktop_dimensions import DimensionsMixin
 
 NAVY, GOLD, LIGHT = "#071b2e", "#c9a96a", "#f3f6f8"
 
@@ -69,7 +70,7 @@ def natural_sort_value(value):
     try: return (0,float(text.replace(",","")))
     except ValueError: return (1,text.casefold())
 
-class SaberApp(BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
+class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Saber Accounting")
@@ -807,7 +808,8 @@ class SaberApp(BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         ttk.Combobox(payment,textvariable=self.sales_payment_method,values=["On Account (Not Cash)","Cash","Bank Transfer","Cheque","Card","Other"],state="readonly",width=20).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Due Date",bg=LIGHT).pack(side="left"); self.date_entry(payment,self.sales_due_date,12).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Amount Paid",bg=LIGHT).pack(side="left"); tk.Entry(payment,textvariable=self.sales_amount_paid,width=12).pack(side="left",padx=(4,12))
-        tk.Label(payment,text="Branch",bg=LIGHT).pack(side="left"); self.branch_selector(payment,self.sales_branch,16,False).pack(side="left",padx=4)
+        tk.Label(payment,text="Branch",bg=LIGHT).pack(side="left"); self.branch_selector(payment,self.sales_branch,16,False).pack(side="left",padx=(4,10))
+        self.sales_department=tk.StringVar(); self.sales_project=tk.StringVar(); self.dimension_selectors(payment,self.sales_department,self.sales_project)
         self.sales_payment_method.trace_add("write",lambda *_args:self.sales_payment_changed())
         self.sales_exchange=tk.Label(header,text="",bg=LIGHT,fg="#5f6b76",anchor="w"); self.sales_exchange.grid(row=3,column=0,columnspan=8,sticky="w",pady=(6,0))
         self.sales_currency.trace_add("write",lambda *_args:self.update_sales_totals())
@@ -879,6 +881,7 @@ class SaberApp(BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         self.sales_edit_id=None; self.sales_items=[]; self.sales_sheet.delete(*self.sales_sheet.get_children())
         self.sales_party.set(""); self.sales_supplier_account.set(""); self.sales_amount_paid.set("0"); self.sales_due_date.set(""); self.sales_open_choice.set("")
         self.sales_payment_method.set("On Account (Not Cash)"); self.sales_date.set(datetime.now().strftime("%d-%m-%Y"))
+        self.sales_department.set("(none)"); self.sales_project.set("(none)")
         self.sales_mode_label.config(text="NEW INVOICE",bg=GOLD); self.load_sales_customer_list(); self.refresh_sales_number()
         self.add_sales_item(); self.update_sales_totals()
 
@@ -1039,6 +1042,9 @@ class SaberApp(BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         self.sales_no.set(detail["invoice_number"]); self.sales_date.set(safe_display_date(detail["invoice_date"])); self.sales_party.set(detail["party_name"] or "")
         self.sales_currency.set(detail["currency"]); self.sales_supplier_account.set(detail.get("supplier_account") or ""); self.sales_vat_account.set(detail.get("vat_account") or "442700000")
         self.sales_expense_account.set(detail.get("expense_account") or "713100000"); self.sales_payment_method.set(detail.get("payment_method") or "On Account (Not Cash)")
+        lists=self.dimension_lists(refresh=True)
+        self.sales_department.set(next((f'{d["code"]} - {d["name"]}' for d in lists["departments"] if d["id"]==detail.get("department_id")),"(none)"))
+        self.sales_project.set(next((f'{p["code"]} - {p["name"]}' for p in lists["projects"] if p["id"]==detail.get("project_id")),"(none)"))
         self.sales_amount_paid.set(str(detail.get("amount_paid") or 0)); self.sales_due_date.set(safe_display_date(detail.get("due_date")) if detail.get("due_date") else "")
         for line in items or [{"description":"Invoice total","quantity":1,"unit_price":float(detail["subtotal"] or 0),"deductible_subtotal":float(detail.get("deductible_subtotal") or detail["subtotal"] or 0),"vat":float(detail["vat"] or 0),"vat_rate":11}]:
             item={"description":line["description"],"quantity":float(line["quantity"]),"unit_price":float(line["unit_price"]),"deductible_subtotal":float(line.get("deductible_subtotal") or line.get("subtotal") or 0),
@@ -1057,7 +1063,8 @@ class SaberApp(BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
                  "vat_account":self.sales_vat_account.get().split(" - ",1)[0].strip() or "442700000",
                  "expense_account":self.sales_expense_account.get().split(" - ",1)[0].strip() or "713100000",
                  "due_date":self.sales_due_date.get().strip(),"payment_method":self.sales_payment_method.get(),"amount_paid":self.sales_amount_paid.get().strip().replace(",","") or "0",
-                 "branch":self.sales_branch.get(),"status":"posted" if post else "review","source_file":"Sales Invoice","source_row":None}
+                 "branch":self.sales_branch.get(),"status":"posted" if post else "review","source_file":"Sales Invoice","source_row":None,
+                 "department":self.dimension_code(self.sales_department.get()),"project":self.dimension_code(self.sales_project.get())}
         try:
             invoice["invoice_date"]=formatted_user_date(invoice["invoice_date"])
             if invoice["due_date"]: invoice["due_date"]=formatted_user_date(invoice["due_date"])
@@ -1283,10 +1290,11 @@ class SaberApp(BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
             else: text=f'{"LBP rate not entered" if lbp is None else f"LBP {lbp:,.2f}"}   |   {"USD rate not entered" if usd is None else f"USD {usd:,.2f}"}'
             exchange_text.config(text="Exchange equivalent: "+text)
         for key in ("with_vat_subtotal","without_vat_subtotal","vat","currency"): values[key].trace_add("write",update_exchange)
-        non_deductible=tk.BooleanVar(value=False)
+        non_deductible=tk.BooleanVar(value=False); expense_department=tk.StringVar(); expense_project=tk.StringVar()
+        dims=tk.Frame(window,bg=LIGHT); dims.grid(row=len(labels)+3,column=0,columnspan=2,pady=(0,4)); self.dimension_selectors(dims,expense_department,expense_project)
         tk.Checkbutton(window,text="VAT is NOT deductible (add it to the expense cost)",variable=non_deductible,bg=LIGHT).grid(row=len(labels)+2,column=0,columnspan=2,pady=(0,4))
         def save():
-            try: self.client.add_expense({**{key:var.get().strip() for key,var in values.items()},"vat_recoverable":not non_deductible.get()})
+            try: self.client.add_expense({**{key:var.get().strip() for key,var in values.items()},"vat_recoverable":not non_deductible.get(),"department":self.dimension_code(expense_department.get()),"project":self.dimension_code(expense_project.get())})
             except Exception as exc: return messagebox.showerror("Expenses",str(exc),parent=window)
             window.destroy(); self.load_transactions(); self.load_journal(); self.load_trial(); self.load_profit_loss(); self.load_financial_reports(); messagebox.showinfo("Expenses","Saved successfully")
         self.action_button(window,"Save Expense",save).grid(row=len(labels)+1,column=0,columnspan=2,pady=14)
@@ -1761,7 +1769,7 @@ class SaberApp(BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         tk.Button(controls,text="Apply",command=self.load_financial_reports,bg=GOLD,fg=NAVY,border=0,padx=15,pady=6).pack(side="left")
         nested=ttk.Notebook(self.reports_tab); nested.pack(fill="both",expand=True,padx=10,pady=(0,10))
         gl=tk.Frame(nested,bg=LIGHT); bs=tk.Frame(nested,bg=LIGHT); vat=tk.Frame(nested,bg=LIGHT); cash=tk.Frame(nested,bg=LIGHT); aging=tk.Frame(nested,bg=LIGHT); comparative=tk.Frame(nested,bg=LIGHT)
-        nested.add(gl,text="General Ledger"); nested.add(bs,text="Balance Sheet"); nested.add(vat,text="Lebanese VAT Report"); nested.add(cash,text="Cash Flow"); nested.add(aging,text="Receivables / Payables Aging"); nested.add(comparative,text="Comparative P&L")
+        nested.add(gl,text="General Ledger"); nested.add(bs,text="Balance Sheet"); nested.add(vat,text="Lebanese VAT Report"); nested.add(cash,text="Cash Flow"); nested.add(aging,text="Receivables / Payables Aging"); nested.add(comparative,text="Comparative P&L"); self.build_budget_page(nested)
         self.ledger_tree=self.table(gl,[("date","Date",95),("entry","Entry",90),("account","Account",85),("name","Account Name",180),("description","Description",200),("currency","Currency",70),("debit","Debit",105),("credit","Credit",105),("balance","Balance",110)])
         self.report_buttons(gl,"ledger")
         self.balance_tree=self.table(bs,[("currency","Currency",80),("type","Type",90),("account","Account",90),("name","Account Name",280),("debit","Debit",120),("credit","Credit",120),("balance","Balance",130)])
@@ -1888,7 +1896,7 @@ class SaberApp(BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
     def build_settings(self):
         nested=ttk.Notebook(self.settings_tab); nested.pack(fill="both",expand=True,padx=10,pady=10)
         users=tk.Frame(nested,bg=LIGHT); backups=tk.Frame(nested,bg=LIGHT); rates=tk.Frame(nested,bg=LIGHT); branches=tk.Frame(nested,bg=LIGHT); general=tk.Frame(nested,bg=LIGHT)
-        nested.add(users,text="Users & Permissions"); nested.add(backups,text="Backup & Restore"); nested.add(rates,text="Exchange Rates"); nested.add(branches,text="Branches"); nested.add(general,text="General Settings")
+        nested.add(users,text="Users & Permissions"); nested.add(backups,text="Backup & Restore"); nested.add(rates,text="Exchange Rates"); nested.add(branches,text="Branches"); nested.add(general,text="General Settings"); self.build_dimensions_pages(nested)
         self.build_users_page(users)
         backup_controls=tk.Frame(backups,bg=LIGHT); backup_controls.pack(fill="x",padx=10,pady=10)
         self.action_button(backup_controls,"Create Backup Now",self.create_backup).pack(side="left",padx=4)
