@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import json
+import re
+import secrets
+import sqlite3
+import uuid
+from datetime import datetime
+from pathlib import Path
+
+from database import Database, utcnow
+
+
+class CompanyManager:
+    """Keeps every company/fiscal year in its own SQLite file."""
+
+    def __init__(self, master_database):
+        self.master_path=Path(master_database).resolve()
+        self.root=self.master_path.parent/"companies"; self.root.mkdir(parents=True,exist_ok=True)
+        self.registry_path=self.root/"companies.json"; self._cache={}
+        if not self.registry_path.exists():
+            self._write({"companies":[{"id":"ecologe-lebanon-sarl","name":"ECOLOGE LEBANON SARL","active":True,
+                "years":[{"year":2024,"database":str(self.master_path),"status":"open"}]}]})
+        else:
+            data=self._read(); companies=data.get("companies",[])
+            if len(companies)==1 and companies[0].get("id")=="saber-for-audit" and companies[0].get("name")=="Saber for Audit":
+                companies[0]["id"]="ecologe-lebanon-sarl"; companies[0]["name"]="ECOLOGE LEBANON SARL"
+                for fiscal in companies[0].get("years",[]): fiscal["year"]=2024
+                self._write(data)
+                try:
+                    with Database(self.master_path).connect() as db:
+                        db.execute("INSERT INTO app_settings(key,value) VALUES('company_name','ECOLOGE LEBANON SARL') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                except Exception: pass
+
+    def _read(self):
+        try: return json.loads(self.registry_path.read_text(encoding="utf-8"))
+        except Exception: return {"companies":[]}
+
+    def _write(self,data):
+        temporary=self.registry_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8"); temporary.replace(self.registry_path)
+
+    def list_companies(self,include_inactive=False):
+        companies=self._read()["companies"]
+        return companies if include_inactive else [c for c in companies if c.get("active",True)]
+
+    def _company(self,company_id):
+        company=next((c for c in self._read()["companies"] if c["id"]==company_id),None)
+        if not company: raise KeyError("Company not found")
+        return company
+
+    def database(self,company_id=None,year=None):
+        companies=self.list_companies(True)
+        company=next((c for c in companies if c["id"]==(company_id or "saber-for-audit")),None) or companies[0]
+        years=company.get("years",[])
+        selected=next((y for y in years if int(y["year"])==int(year)),None) if year else (max(years,key=lambda y:int(y["year"])) if years else None)
+        if not selected: raise KeyError("Fiscal year not found")
+        path=str(Path(selected["database"]).resolve())
+        if path not in self._cache: self._cache[path]=Database(path)
+        return self._cache[path]
+
+    def year_status(self,company_id,year):
+        company=self._company(company_id or "saber-for-audit")
+        selected=next((item for item in company.get("years",[]) if int(item["year"])==int(year)),None)
+        return selected.get("status","open") if selected else "open"
+
+    def create_company(self,item,master_db):
+        name=str(item.get("name") or "").strip(); year=int(item.get("year") or datetime.now().year)
+        if not name or year<2000 or year>2100: raise ValueError("Enter a valid company name and fiscal year")
+        data=self._read(); company_id=re.sub(r"[^a-z0-9]+","-",name.lower()).strip("-") or uuid.uuid4().hex[:10]
+        if any(c["id"]==company_id or c["name"].casefold()==name.casefold() for c in data["companies"]): raise ValueError("Company already exists")
+        company_id=f"{company_id}-{uuid.uuid4().hex[:6]}"; folder=self.root/company_id; folder.mkdir(parents=True,exist_ok=True)
+        path=folder/f"{year}.db"; target=Database(path); target.initialize(secrets.token_urlsafe(24))
+        self._copy_master_data(master_db,target)
+        settings={"company_name":name,"company_address":item.get("address","").strip(),"company_phone":item.get("phone","").strip(),
+            "company_mof":item.get("mof_number","").strip(),"company_email":item.get("email","").strip(),"company_website":item.get("website","").strip()}
+        with target.connect() as db:
+            for key,value in settings.items(): db.execute("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(key,value))
+        company={"id":company_id,"name":name,"active":True,"years":[{"year":year,"database":str(path.resolve()),"status":"open"}]}
+        data["companies"].append(company); self._write(data); return company
+
+    def update_company(self,company_id,item):
+        data=self._read(); company=next((c for c in data["companies"] if c["id"]==company_id),None)
+        if not company: raise KeyError("Company not found")
+        if str(item.get("name") or "").strip(): company["name"]=str(item["name"]).strip()
+        if "active" in item: company["active"]=bool(item["active"])
+        self._write(data)
+        for year in company.get("years",[]):
+            db=Database(year["database"])
+            with db.connect() as connection:
+                connection.execute("INSERT INTO app_settings(key,value) VALUES('company_name',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(company["name"],))
+        return company
+
+    def create_year(self,company_id,year,user_id):
+        year=int(year); data=self._read(); company=next((c for c in data["companies"] if c["id"]==company_id),None)
+        if not company: raise KeyError("Company not found")
+        if any(int(y["year"])==year for y in company["years"]): raise ValueError("Fiscal year already exists")
+        previous=max((y for y in company["years"] if int(y["year"])<year),key=lambda y:int(y["year"]),default=None)
+        if not previous: raise ValueError("Create fiscal years in chronological order")
+        source=Database(previous["database"])
+        path=self.root/company_id/f"{year}.db"; target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
+        company["years"].append({"year":year,"database":str(path.resolve()),"status":"open"}); company["years"].sort(key=lambda y:int(y["year"]))
+        self._write(data); return company
+
+    def reopen_year(self,company_id,year,user_id):
+        year=int(year); data=self._read(); company=next((c for c in data["companies"] if c["id"]==company_id),None)
+        if not company: raise KeyError("Company not found")
+        current=next((item for item in company.get("years",[]) if int(item["year"])==year),None)
+        if not current: raise ValueError("Fiscal year not found for this company")
+        result=Database(current["database"]).reopen_fiscal_year(year,user_id)
+        current["status"]="open"
+        next_year=next((item for item in company.get("years",[]) if int(item["year"])==year+1),None)
+        removed_opening=0
+        if next_year:
+            with Database(next_year["database"]).connect() as db:
+                ids=[row["id"] for row in db.execute("SELECT id FROM journal_entries WHERE source_type='opening' AND entry_number LIKE ?",(f"OPEN-{year+1}-%",))]
+                for entry_id in ids: db.execute("DELETE FROM journal_entries WHERE id=?",(entry_id,))
+                removed_opening=len(ids)
+        self._write(data); return {**result,"company":company,"removed_opening_entries":removed_opening}
+
+    def refresh_opening(self,company_id,source_year,user_id):
+        source_year=int(source_year); target_year=source_year+1; company=self._company(company_id)
+        source_record=next((item for item in company.get("years",[]) if int(item["year"])==source_year),None)
+        target_record=next((item for item in company.get("years",[]) if int(item["year"])==target_year),None)
+        if not source_record or not target_record: raise ValueError(f"Both fiscal years {source_year} and {target_year} must exist")
+        source=Database(source_record["database"]); target=Database(target_record["database"])
+        with target.connect() as db:
+            ids=[row["id"] for row in db.execute("SELECT id FROM journal_entries WHERE source_type='opening' AND entry_number LIKE ?",(f"OPEN-{target_year}-%",))]
+            for entry_id in ids: db.execute("DELETE FROM journal_entries WHERE id=?",(entry_id,))
+            db.execute("INSERT INTO audit_log(user_id,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?)",
+                (user_id,"refresh_opening","fiscal_year",target_year,json.dumps({"source_year":source_year,"replaced":len(ids)}),utcnow()))
+        vouchers=self._opening_balances(source,target,target_year,user_id)
+        return {"source_year":source_year,"target_year":target_year,"opening_vouchers":vouchers,"replaced":len(ids),"provisional":source_record.get("status")!="closed"}
+
+    def close_and_open_year(self,company_id,year,user_id):
+        """Close one company year, create its next database, and post opening vouchers."""
+        year=int(year); next_year=year+1; data=self._read()
+        company=next((c for c in data["companies"] if c["id"]==company_id),None)
+        if not company: raise KeyError("Company not found")
+        current=next((y for y in company.get("years",[]) if int(y["year"])==year),None)
+        if not current: raise ValueError("Fiscal year not found for this company")
+        next_record=next((item for item in company.get("years",[]) if int(item["year"])==next_year),None)
+        source=Database(current["database"])
+        close_result=source.close_fiscal_year(year,user_id)
+        current["status"]="closed"
+        if next_record:
+            path=Path(next_record["database"]); target=Database(path)
+            with target.connect() as db:
+                ids=[row["id"] for row in db.execute("SELECT id FROM journal_entries WHERE source_type='opening' AND entry_number LIKE ?",(f"OPEN-{next_year}-%",))]
+                for entry_id in ids: db.execute("DELETE FROM journal_entries WHERE id=?",(entry_id,))
+        else:
+            path=self.root/company_id/f"{next_year}.db"
+            target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
+        opening_vouchers=self._opening_balances(source,target,next_year,user_id)
+        if not next_record: company["years"].append({"year":next_year,"database":str(path.resolve()),"status":"open"})
+        company["years"].sort(key=lambda item:int(item["year"]))
+        self._write(data)
+        return {**close_result,"company":company,"opening_vouchers":opening_vouchers}
+
+    def _copy_master_data(self,source,target):
+        with source.connect() as src, target.connect() as dst:
+            for table in ("users","accounts","parties","branches","app_settings"):
+                rows=src.execute(f"SELECT * FROM {table}").fetchall()
+                if not rows: continue
+                columns=list(rows[0].keys())
+                if table=="accounts": dst.execute("UPDATE accounts SET parent_id=NULL")
+                dst.execute(f"DELETE FROM {table}")
+                placeholders=",".join("?" for _ in columns)
+                dst.executemany(f"INSERT INTO {table}({','.join(columns)}) VALUES({placeholders})",[tuple(row[col] for col in columns) for row in rows])
+
+    def _opening_balances(self,source,target,year,user_id):
+        rows=source.trial_balance(to_date=f"{year-1}-12-31")
+        by_currency={}
+        for row in rows:
+            balance=float(row.get("balance") or 0)
+            if abs(balance)>=0.005: by_currency.setdefault(row["currency"],[]).append((row["code"],balance))
+        vouchers=[]
+        with target.connect() as db:
+            branch=db.execute("SELECT id FROM branches ORDER BY id LIMIT 1").fetchone()
+            for currency,lines in by_currency.items():
+                number=f"OPEN-{year}-{currency}"
+                entry=db.execute("INSERT INTO journal_entries(entry_number,entry_date,description,source_type,currency,created_by,created_at,branch_id) VALUES(?,?,?,?,?,?,?,?)",
+                    (number,f"01-01-{year}",f"Opening balances {year}","opening",currency,user_id,utcnow(),branch["id"] if branch else None))
+                for code,balance in lines:
+                    account=db.execute("SELECT id FROM accounts WHERE code=?",(code,)).fetchone()
+                    if account: db.execute("INSERT INTO journal_lines(entry_id,account_id,debit,credit) VALUES(?,?,?,?)",(entry.lastrowid,account["id"],str(max(balance,0)),str(max(-balance,0))))
+                vouchers.append(number)
+        return vouchers
