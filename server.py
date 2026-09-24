@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from database import Database
 from company_manager import CompanyManager
 from payroll_reports import build_payroll_report, json_ready as payroll_json
+import ledger_reports
 import vat_return
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -86,6 +87,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                     self._query(parsed,"include_drafts","false").lower()=="true")
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,payroll_json(result))
+        if path == "/api/reports/accounts":
+            try:
+                options=json.loads(self._query(parsed,"options","{}") or "{}")
+                return self._json(200,ledger_reports.json_ready(ledger_reports.build_account_report(self.db,options)))
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path == "/api/rates/suggest":
+            try:
+                rates=self.db.suggested_rates(self._query(parsed,"currency","USD"),self._query(parsed,"date"))
+                return self._json(200,{k:(float(v) if not isinstance(v,str) else v) for k,v in rates.items()})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/payroll/settings/list": return self._json(200,{"items":self.db.list_payroll_settings()})
         if path == "/api/vat-return":
             try:
@@ -105,6 +116,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                 year_db=self.company_manager.database(company_id,year)
                 return self._json(200,{"items":year_db.journal(query.get("from_date",[None])[0],query.get("to_date",[None])[0],query.get("currency",[None])[0]),"year":year,"read_only":True})
             except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path == "/api/invoices/next-number":
+            try: return self._json(200,{"invoice_number":self.db.next_invoice_number(self._query(parsed,"kind","sale"),self._query(parsed,"date"))})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path == "/api/parties/next-number":
+            try: return self._json(200,{"account_number":self.db.next_party_account_number(self._query(parsed,"prefix",""))})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/invoices/") and path.endswith("/items"):
+            try: return self._json(200,{"items":self.db.invoice_detail(int(path.split("/")[-2])).get("items",[])})
+            except KeyError: return self._json(404,{"error":"Invoice not found"})
         if path == "/api/invoices":
             return self._json(200, {"items": self.db.list_invoices()})
         if path.startswith("/api/invoices/") and path.endswith("/detail"):

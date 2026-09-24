@@ -316,6 +316,11 @@ class Database:
                     try: fixed=iso_date(row["value"])
                     except ValueError: continue
                     if fixed!=row["value"]: db.execute(f"UPDATE OR IGNORE {table} SET {column}=? WHERE id=?",(fixed,row["id"]))
+            line_columns={row["name"] for row in db.execute("PRAGMA table_info(journal_lines)")}
+            for column in ("line_currency","amount","amount_lbp","amount_usd","rate_lbp","rate_usd","due_date","reference"):
+                if column not in line_columns: db.execute(f"ALTER TABLE journal_lines ADD COLUMN {column} TEXT")
+            entry_columns={row["name"] for row in db.execute("PRAGMA table_info(journal_entries)")}
+            if "voucher_type" not in entry_columns: db.execute("ALTER TABLE journal_entries ADD COLUMN voucher_type TEXT NOT NULL DEFAULT '01'")
             user_columns={row["name"] for row in db.execute("PRAGMA table_info(users)")}
             if "expires_at" not in user_columns: db.execute("ALTER TABLE users ADD COLUMN expires_at TEXT")
             if "permissions" not in user_columns: db.execute("ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '{}'")
@@ -797,10 +802,15 @@ class Database:
         if not date or not description or currency not in ("USD","EUR","LBP","AED"): raise ValueError("Enter voucher date, description, and currency")
         if not isinstance(lines,list) or len(lines)<2: raise ValueError("Journal Voucher requires at least two lines")
         normalized=[]; total_debit=Decimal("0"); total_credit=Decimal("0")
+        voucher_type=str(item.get("voucher_type") or "01").strip()[:2] or "01"
         for index,line in enumerate(lines,1):
-            code=str(line.get("account_code") or "").split(" - ",1)[0].strip(); debit=Decimal(str(line.get("debit") or 0)); credit=Decimal(str(line.get("credit") or 0))
+            code=str(line.get("account_code") or "").split(" - ",1)[0].strip(); extra=self._voucher_line_amounts(line,currency,date,index)
+            if extra: debit,credit=extra["debit"],extra["credit"]
+            else:
+                try: debit=Decimal(str(line.get("debit") or 0)); credit=Decimal(str(line.get("credit") or 0))
+                except Exception as exc: raise ValueError(f"Line {index}: Debit and Credit must be numbers") from exc
             if not code or min(debit,credit)<0 or (debit>0 and credit>0) or (debit==0 and credit==0): raise ValueError(f"Line {index}: choose an account and enter either Debit or Credit")
-            normalized.append((code,str(line.get("description") or "").strip(),debit,credit)); total_debit+=debit; total_credit+=credit
+            normalized.append((code,str(line.get("description") or "").strip(),debit,credit,extra)); total_debit+=debit; total_credit+=credit
         if abs(total_debit-total_credit)>=Decimal("0.005"): raise ValueError(f"Journal Voucher is unbalanced. Debit {total_debit}; Credit {total_credit}; Remaining {abs(total_debit-total_credit)}")
         with self.connect() as db:
             branch_id=self._branch_id(db,item)
@@ -810,7 +820,7 @@ class Database:
                 self._assert_period_open(existing["entry_date"]); voucher_number=str(item.get("entry_number") or existing["entry_number"]).strip()
                 duplicate=db.execute("SELECT 1 FROM journal_entries WHERE entry_number=? AND id<>?",(voucher_number,int(entry_id))).fetchone()
                 if duplicate: raise ValueError("Voucher number already exists")
-                db.execute("UPDATE journal_entries SET entry_number=?,entry_date=?,description=?,currency=?,branch_id=? WHERE id=?",(voucher_number,date,description,currency,branch_id,int(entry_id)))
+                db.execute("UPDATE journal_entries SET entry_number=?,entry_date=?,description=?,currency=?,branch_id=?,voucher_type=? WHERE id=?",(voucher_number,date,description,currency,branch_id,voucher_type,int(entry_id)))
                 db.execute("DELETE FROM journal_lines WHERE entry_id=?",(int(entry_id),)); saved_id=int(entry_id); action="update"
             else:
                 voucher_number=str(item.get("entry_number") or "").strip()
@@ -818,20 +828,56 @@ class Database:
                     year=self._date_year(date); prefix=f"JV-{year}-"; row=db.execute("SELECT entry_number FROM journal_entries WHERE entry_number LIKE ? ORDER BY entry_number DESC LIMIT 1",(prefix+"%",)).fetchone()
                     sequence=int(row["entry_number"].rsplit("-",1)[-1])+1 if row else 1; voucher_number=f"{prefix}{sequence:06d}"
                 if db.execute("SELECT 1 FROM journal_entries WHERE entry_number=?",(voucher_number,)).fetchone(): raise ValueError("Voucher number already exists")
-                saved_id=db.execute("INSERT INTO journal_entries(entry_number,entry_date,description,source_type,currency,branch_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)",(voucher_number,date,description,"journal_voucher",currency,branch_id,user_id,utcnow())).lastrowid; action="create"
-            for code,line_description,debit,credit in normalized:
+                saved_id=db.execute("INSERT INTO journal_entries(entry_number,entry_date,description,source_type,currency,branch_id,created_by,created_at,voucher_type) VALUES(?,?,?,?,?,?,?,?,?)",(voucher_number,date,description,"journal_voucher",currency,branch_id,user_id,utcnow(),voucher_type)).lastrowid; action="create"
+            for code,line_description,debit,credit,extra in normalized:
                 account=db.execute("SELECT id FROM accounts WHERE code=?",(code,)).fetchone()
                 if not account: raise ValueError(f"Account {code} was not found")
-                db.execute("INSERT INTO journal_lines(entry_id,account_id,description,debit,credit) VALUES(?,?,?,?,?)",(saved_id,account["id"],line_description,str(debit),str(credit)))
+                party=db.execute("SELECT id FROM parties WHERE account_number=?",(code,)).fetchone()
+                db.execute("""INSERT INTO journal_lines(entry_id,account_id,party_id,description,debit,credit,line_currency,amount,amount_lbp,amount_usd,rate_lbp,rate_usd,due_date,reference)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(saved_id,account["id"],party["id"] if party else None,line_description,str(debit),str(credit),
+                    *( (extra["line_currency"],str(extra["amount"]),str(extra["amount_lbp"]),str(extra["amount_usd"]),str(extra["rate_lbp"]),str(extra["rate_usd"]),extra["due_date"],extra["reference"]) if extra else (None,)*8 )))
             db.execute("INSERT INTO audit_log(user_id,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?)",(user_id,action,"journal_voucher",saved_id,json.dumps({"entry_number":voucher_number,"debit":str(total_debit),"credit":str(total_credit)}),utcnow()))
         return self.journal_voucher_detail(saved_id)
+
+    def suggested_rates(self,currency,date=None):
+        """BRAINS convention: LBP rate = LBP for 1 unit; USD rate = USD for 1 unit (for LBP lines: LBP per 1 USD)."""
+        currency=str(currency or "USD").upper(); day=date or datetime.now().strftime("%d-%m-%Y")
+        usd_lbp=self._converted_amount(Decimal("1"),"USD","LBP",day)
+        if currency=="LBP": return {"currency":"LBP","rate_lbp":Decimal("1"),"rate_usd":usd_lbp}
+        if currency=="USD": return {"currency":"USD","rate_lbp":usd_lbp,"rate_usd":Decimal("1")}
+        return {"currency":currency,"rate_lbp":self._converted_amount(Decimal("1"),currency,"LBP",day),"rate_usd":self._converted_amount(Decimal("1"),currency,"USD",day)}
+
+    def _voucher_line_amounts(self,line,voucher_currency,date,index):
+        """Lines entered like BRAINS: currency, D/C, amount in the account currency and LBP / USD rates."""
+        if line.get("amount") in (None,"") or not line.get("side"): return None
+        side=str(line.get("side")).strip().upper()[:1]
+        if side not in ("D","C"): raise ValueError(f"Line {index}: D/C must be D or C")
+        currency=str(line.get("line_currency") or voucher_currency).upper()
+        if currency not in ("USD","EUR","LBP","AED"): raise ValueError(f"Line {index}: invalid currency")
+        try:
+            amount=Decimal(str(line.get("amount")).replace(",","")); suggested=self.suggested_rates(currency,date)
+            rate_lbp=Decimal(str(line.get("rate_lbp") or suggested["rate_lbp"]).replace(",","")); rate_usd=Decimal(str(line.get("rate_usd") or suggested["rate_usd"]).replace(",",""))
+        except Exception as exc: raise ValueError(f"Line {index}: amount and rates must be numbers") from exc
+        if amount<=0 or rate_lbp<=0 or rate_usd<=0: raise ValueError(f"Line {index}: amount and rates must be above zero")
+        amount_lbp=(amount*rate_lbp).quantize(Decimal("0.01")); amount_usd=((amount/rate_usd) if currency=="LBP" else amount*rate_usd).quantize(Decimal("0.001"))
+        if currency==voucher_currency: value=amount
+        elif voucher_currency=="USD": value=amount_usd
+        elif voucher_currency=="LBP": value=amount_lbp
+        else: raise ValueError(f"Line {index}: a {voucher_currency} voucher can only contain {voucher_currency} lines. Use a USD or LBP voucher to mix currencies")
+        value=value.quantize(Decimal("0.01"))
+        due=str(line.get("due_date") or "").strip()
+        return {"debit":value if side=="D" else Decimal("0"),"credit":value if side=="C" else Decimal("0"),"line_currency":currency,"amount":amount,
+                "amount_lbp":amount_lbp,"amount_usd":amount_usd,"rate_lbp":rate_lbp,"rate_usd":rate_usd,"due_date":display_date(due) if due else None,
+                "reference":str(line.get("reference") or "").strip() or None}
 
     def journal_voucher_detail(self,entry_id):
         with self.connect() as db:
             entry=db.execute("SELECT * FROM journal_entries WHERE id=? AND source_type='journal_voucher'",(int(entry_id),)).fetchone()
             if not entry: raise KeyError(entry_id)
             lines=[dict(row) for row in db.execute("""SELECT a.code account_code,a.name_en account_name,COALESCE(j.description,'') description,
-                CAST(j.debit AS REAL) debit,CAST(j.credit AS REAL) credit FROM journal_lines j JOIN accounts a ON a.id=j.account_id WHERE j.entry_id=? ORDER BY j.id""",(int(entry_id),))]
+                CAST(j.debit AS REAL) debit,CAST(j.credit AS REAL) credit,j.line_currency,CAST(j.amount AS REAL) amount,CAST(j.amount_lbp AS REAL) amount_lbp,
+                CAST(j.amount_usd AS REAL) amount_usd,CAST(j.rate_lbp AS REAL) rate_lbp,CAST(j.rate_usd AS REAL) rate_usd,j.due_date,j.reference
+                FROM journal_lines j JOIN accounts a ON a.id=j.account_id WHERE j.entry_id=? ORDER BY j.id""",(int(entry_id),))]
         return {"voucher":dict(entry),"lines":lines}
 
     def update_invoice(self, invoice_id, item, user_id):
@@ -1047,7 +1093,7 @@ class Database:
     def invoice_detail(self, invoice_id):
         invoice=self.get_invoice(invoice_id)
         with self.connect() as db:
-            items=[dict(row) for row in db.execute("SELECT description,quantity,unit_price,subtotal,vat_rate,vat,total FROM invoice_items WHERE invoice_id=? ORDER BY id",(invoice_id,))]
+            items=[dict(row) for row in db.execute("SELECT description,quantity,unit_price,subtotal,deductible_subtotal,non_deductible_subtotal,vat_rate,vat,total FROM invoice_items WHERE invoice_id=? ORDER BY id",(invoice_id,))]
         return {"invoice":invoice,"items":items}
 
     def add_attachment(self, invoice_id, file_name, mime_type, content, user_id):
@@ -1640,6 +1686,17 @@ class Database:
             return [dict(r) for r in db.execute("""SELECT a.code,a.name_en,a.name_ar,a.name_fr,a.type,
                 p.code parent_code FROM accounts a LEFT JOIN accounts p ON p.id=a.parent_id
                 ORDER BY CASE WHEN instr(a.code,'.')>0 THEN replace(a.code,'.','') ELSE a.code END""")]
+
+    def next_party_account_number(self,prefix):
+        """Next free 9-digit customer/supplier account under a 4-digit prefix (e.g. 4111 -> 411100007)."""
+        prefix="".join(character for character in str(prefix or "") if character.isdigit())
+        if len(prefix)!=4: raise ValueError("Enter the first 4 account digits")
+        with self.connect() as db:
+            used=[int(row["value"]) for row in db.execute("""SELECT account_number value FROM parties WHERE length(account_number)=9 AND account_number LIKE ?
+                UNION SELECT code FROM accounts WHERE length(code)=9 AND code GLOB '[0-9]*' AND code LIKE ?""",(prefix+"%",prefix+"%")) if str(row["value"]).isdigit()]
+        number=max(used,default=int(prefix+"00000"))+1
+        if number>int(prefix+"99999"): raise ValueError(f"No account numbers remain under prefix {prefix}")
+        return str(number).zfill(9)
 
     def next_account_number(self,prefix):
         prefix="".join(character for character in str(prefix or "") if character.isdigit())

@@ -187,4 +187,9 @@ class ApiClient:
     def set_vat_recoverable(self,source,document_id,recoverable):
         return self.request("POST","/api/vat-recoverable",{"source":source,"id":document_id,"recoverable":bool(recoverable)})
     def document_alerts(self,days=30): return self.request("GET",f"/api/alerts/documents?{urlencode({'days':days})}")
-
+    def next_invoice_number(self,kind="sale",date=None):
+        return self.request("GET","/api/invoices/next-number?"+urlencode({k:v for k,v in {"kind":kind,"date":date}.items() if v}))["invoice_number"]
+    def next_party_account_number(self,prefix): return self.request("GET",f"/api/parties/next-number?{urlencode({'prefix':prefix})}")["account_number"]
+    def invoice_items(self,invoice_id): return self.request("GET",f"/api/invoices/{invoice_id}/items")["items"]
+    def account_report(self,options): return self.request("GET","/api/reports/accounts?"+urlencode({"options":json.dumps(options)}))
+    def suggested_rates(self,currency,date=None): return self.request("GET","/api/rates/suggest?"+urlencode({k:v for k,v in {"currency":currency,"date":date}.items() if v}))

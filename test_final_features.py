@@ -17,6 +17,7 @@ from payroll_reports import build_payroll_report, period_range
 from report_export import export_sections_excel, export_sections_pdf
 from server import run_server
 import vat_return
+import ledger_reports
 
 
 def new_db(folder, name="test.db"):
@@ -241,12 +242,66 @@ class UsersAlertsAndRatesTest(unittest.TestCase):
         from desktop import safe_display_date
         self.assertEqual(safe_display_date("2025-06-30"), "30-06-2025"); self.assertEqual(safe_display_date("June 2025"), "June 2025")
 
+    def test_stage1_party_numbers_invoice_numbers_search_and_dates(self):
+        self.assertEqual(self.db.next_party_account_number("4111"), "411100001")
+        self.db.save_party({"kind": "customer", "name": "A", "account_category": "client", "account_number": "4111"}, self.user)
+        self.assertEqual(self.db.next_party_account_number("4111"), "411100002")
+        with self.assertRaisesRegex(ValueError, "4 account digits"): self.db.next_party_account_number("41")
+        self.assertEqual(self.db.next_invoice_number("sale", "15-03-2024"), "SAL-2024-000001")
+        from desktop import auto_dash_date, row_matches_search
+        self.assertEqual([auto_dash_date(v) for v in ("3", "311", "31122", "31122024", "31-12-2024")], ["3", "31-1", "31-12-2", "31-12-2024", "31-12-2024"])
+        self.assertTrue(row_matches_search(("SAL-1", "31-12-2024", "1,250.00"), "1250 31122024"))
+        self.assertFalse(row_matches_search(("SAL-1", "31-12-2024", "1,250.00"), "999"))
+
     def test_exchange_rate_lookup_is_chronological(self):
         self.db.save_exchange_rate({"date_from": "01-06-2025", "date_to": "01-06-2025", "from_currency": "AED", "to_currency": "LBP", "rate": "24000"}, self.user)
         self.db.save_exchange_rate({"date_from": "01-07-2025", "date_to": "01-07-2025", "from_currency": "AED", "to_currency": "LBP", "rate": "25000"}, self.user)
         self.assertEqual(self.db._converted_amount(1, "AED", "LBP", "30-06-2025"), 24000)
         self.assertEqual(self.db._converted_amount(1, "AED", "LBP", "2025-07-15"), 25000)
 
+
+class BrainsStyleVoucherAndReportsTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
+        self.party = self.db.save_party({"kind": "customer", "name": "Client A", "account_category": "client", "account_number": "4111"}, self.user)
+        self.voucher = self.db.save_journal_voucher({"entry_date": "20-02-2025", "description": "Receipt", "currency": "USD", "voucher_type": "02"}, [
+            {"account_code": "531", "line_currency": "USD", "side": "D", "amount": "100"},
+            {"account_code": "531", "line_currency": "LBP", "side": "D", "amount": "8950000"},
+            {"account_code": self.party["account_number"], "line_currency": "USD", "side": "C", "amount": "200", "reference": "RC-1", "due_date": "28022025"}], self.user)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def test_multi_currency_voucher_lines(self):
+        lines = self.voucher["lines"]
+        self.assertEqual(self.voucher["voucher"]["voucher_type"], "02")
+        self.assertEqual([(l["line_currency"], l["debit"], l["credit"]) for l in lines], [("USD", 100, 0), ("LBP", 100, 0), ("USD", 0, 200)])
+        self.assertEqual(lines[1]["amount_usd"], 100); self.assertEqual(lines[2]["amount_lbp"], 17900000); self.assertEqual(lines[2]["due_date"], "28-02-2025")
+        with self.assertRaisesRegex(ValueError, "unbalanced"):
+            self.db.save_journal_voucher({"entry_date": "20-02-2025", "description": "Bad", "currency": "USD"}, [
+                {"account_code": "531", "side": "D", "amount": "10"}, {"account_code": "531", "side": "C", "amount": "9"}], self.user)
+        with self.assertRaisesRegex(ValueError, "EUR voucher can only"):
+            self.db.save_journal_voucher({"entry_date": "20-02-2025", "description": "Bad", "currency": "EUR"}, [
+                {"account_code": "531", "line_currency": "USD", "side": "D", "amount": "10"}, {"account_code": "531", "line_currency": "EUR", "side": "C", "amount": "10"}], self.user)
+
+    def test_trial_balance_options(self):
+        report = ledger_reports.build_account_report(self.db, {"date_from": "01-01-2025", "date_to": "31-12-2025", "first_column": "USD", "second_column": "LBP", "chapters": True})
+        rows = report["sections"][0]["rows"]; grand = rows[-1]
+        self.assertEqual(grand[0], "GRAND TOTAL"); self.assertEqual(grand[-3], grand[-2])  # LBP debit == credit
+        self.assertIn("Total 5", [r[0] for r in rows])
+        split = ledger_reports.build_account_report(self.db, {"first_column": "account", "second_column": "none", "balance_format": True})
+        self.assertEqual({s["heading"] for s in split["sections"]}, {"Trial balance - LBP", "Trial balance - USD"})
+        pnl = ledger_reports.build_account_report(self.db, {"profit_loss_only": True})
+        self.assertEqual(pnl["sections"][0]["heading"], "No movements")
+
+    def test_statement_with_opening_and_reference(self):
+        self.db.save_journal_voucher({"entry_date": "05-03-2025", "description": "Invoice", "currency": "USD"}, [
+            {"account_code": self.party["account_number"], "side": "D", "amount": "50"}, {"account_code": "713", "side": "C", "amount": "50"}], self.user)
+        account = self.party["account_number"]
+        statement = ledger_reports.build_account_report(self.db, {"detailed": True, "statement": True, "account_from": account, "account_to": account,
+            "date_from": "01-03-2025", "date_to": "31-12-2025", "first_column": "USD", "second_column": "none", "reference": True})
+        rows = statement["sections"][0]["rows"]
+        self.assertEqual(rows[0][2], "Opening balance (carried forward)"); self.assertEqual(float(rows[0][-2]), 200)  # credit opening
+        self.assertEqual(float(rows[-1][-1]), -150); self.assertEqual(statement["title"], "Statement of Account")
 
 class StandaloneEndToEndTest(unittest.TestCase):
     """Runs the embedded data service exactly as the installed app does and drives it through the API."""
