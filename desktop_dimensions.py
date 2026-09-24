@@ -156,9 +156,10 @@ class DimensionsMixin:
                  "Leave Department and Project as (none) for the company budget.", bg=LIGHT, fg=MUTED, wraplength=1100, justify="left").pack(fill="x", padx=12, pady=(4, 0))
         columns = [("line", "#", 40, "center"), ("account", "Account", 105, "w"), ("account_name", "Account Name", 190, "w"), ("annual", "Annual", 105, "e")] + \
                   [(m.lower(), m, 78, "e") for m in MONTHS] + [("total", "Months Total", 105, "e")]
-        self.budget_sheet = EditableSheet(self, page, columns, ["account", "annual"] + [m.lower() for m in MONTHS], self.budget_cell_changed, height=9, lookup_column="account")
+        self.budget_sheet = EditableSheet(self, page, columns, ["account", "annual"] + [m.lower() for m in MONTHS], self.budget_cell_changed, height=7, lookup_column="account")
         self.budget_total_label = tk.Label(page, text="", bg=LIGHT, fg=NAVY, font=("Segoe UI", 10, "bold")); self.budget_total_label.pack(anchor="e", padx=14)
         self.budget_viewer = self.report_viewer(page)
+        self.budget_viewer.configure(height=7)
 
     def budget_row(self, code="", name="", annual=0.0, months=None):
         row = {"account": code, "account_name": name, "annual": annual, **{m.lower(): v for m, v in zip(MONTHS, months or [0.0] * 12)}}
@@ -239,9 +240,9 @@ class DimensionsMixin:
 
     # ------------------------------------------------------------ balance panel additions
     def add_dimension_options(self, state, parent):
-        box = tk.Frame(parent, bg=LIGHT); box.pack(fill="x", pady=(4, 0))
+        box = tk.Frame(parent, bg=LIGHT); box.pack(fill="x", pady=(4, 0)); flags_row = tk.Frame(parent, bg=LIGHT); flags_row.pack(fill="x")
         state["vars"]["department"] = tk.StringVar(value="All"); state["vars"]["project"] = tk.StringVar(value="All")
-        self.dimension_selectors(box, state["vars"]["department"], state["vars"]["project"], include_all=True)
+        self.dimension_selectors(box, state["vars"]["department"], state["vars"]["project"], include_all=True); state["dimension_row"] = box
         for name, label in (("with_department", "Show Department / Project"), ("split_by_department", "Split by Department"),
                             ("split_by_project", "Split by Project"), ("budget", "Compare with Budget")):
-            state["flags"][name] = tk.BooleanVar(value=False); tk.Checkbutton(box, text=label, variable=state["flags"][name], bg=LIGHT).pack(side="left", padx=4)
+            state["flags"][name] = tk.BooleanVar(value=False); tk.Checkbutton(flags_row, text=label, variable=state["flags"][name], bg=LIGHT).pack(side="left", padx=4)

@@ -237,7 +237,7 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
             tk.Label(top,image=self.header_logo,bg=NAVY).pack(side="left",padx=(18,8),pady=2)
         except Exception:
             pass
-        tk.Label(top,text=tr(lang,"title"),bg=NAVY,fg="white",font=("Segoe UI",20,"bold")).pack(side="left",padx=8,pady=19)
+        tk.Label(top,text=tr(lang,"title"),bg=NAVY,fg="white",font=("Segoe UI",17,"bold")).pack(side="left",padx=8,pady=19)
         tk.Label(top,text="11% VAT  |  USD · LBP · EUR · AED",bg=NAVY,fg=GOLD,font=("Segoe UI",10,"bold")).pack(side="right",padx=28)
         tk.Button(top,text="Switch Company / Year",command=self.company_selection_screen,bg=GOLD,fg=NAVY,border=0,padx=10,pady=5).pack(side="right",padx=5)
         self.alerts_button=tk.Button(top,text="Document Alerts",command=self.show_document_alerts,bg=NAVY,fg="white",border=1,padx=10,pady=5)
@@ -791,17 +791,17 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         tk.Entry(top,textvariable=self.sales_no,width=18,font=("Segoe UI",10,"bold"),state="readonly",readonlybackground="white").pack(side="left",padx=(0,12))
         tk.Label(top,text="Date",bg=LIGHT).pack(side="left"); self.date_entry(top,self.sales_date,12).pack(side="left",padx=(4,12))
         tk.Label(top,text="Customer",bg=LIGHT).pack(side="left")
-        self.sales_party_box=ttk.Combobox(top,textvariable=self.sales_party,width=30); self.sales_party_box.pack(side="left",padx=(4,12))
+        self.sales_party_box=ttk.Combobox(top,textvariable=self.sales_party,width=26); self.sales_party_box.pack(side="left",padx=(4,12))
         self.sales_party_box.bind("<KeyRelease>",self.search_sales_customers); self.sales_party_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_customer_chosen())
         tk.Label(top,text="Currency",bg=LIGHT).pack(side="left")
         ttk.Combobox(top,textvariable=self.sales_currency,values=["USD","EUR","LBP","AED"],state="readonly",width=6).pack(side="left",padx=(4,12))
         self.sales_mode_label=tk.Label(top,text="NEW INVOICE",bg=GOLD,fg=NAVY,font=("Segoe UI",8,"bold"),padx=8); self.sales_mode_label.pack(side="left",padx=6)
-        account_fields=[("Client Account",self.sales_supplier_account,self.sales_supplier_side),("Output VAT Account",self.sales_vat_account,self.sales_vat_side),("Sales Revenue Account",self.sales_expense_account,self.sales_expense_side)]
+        account_fields=[("Client Account",self.sales_supplier_account,self.sales_supplier_side),("VAT Account",self.sales_vat_account,self.sales_vat_side),("Revenue Account",self.sales_expense_account,self.sales_expense_side)]
         accounts=tk.Frame(header,bg=LIGHT); accounts.grid(row=1,column=0,columnspan=8,sticky="w",pady=(8,0))
         for label,var,side in account_fields:
             tk.Label(accounts,text=label,bg=LIGHT).pack(side="left",padx=(0,4))
-            self.account_search_box(accounts,var,14).pack(side="left")
-            side_box=ttk.Combobox(accounts,textvariable=side,values=["D - Debit","C - Credit"],state="readonly",width=9); side_box.pack(side="left",padx=(3,14))
+            self.account_search_box(accounts,var,12).pack(side="left")
+            side_box=ttk.Combobox(accounts,textvariable=side,values=["D - Debit","C - Credit"],state="readonly",width=9); side_box.pack(side="left",padx=(3,10))
             side_box.bind("<<ComboboxSelected>>",lambda _event:self.update_sales_totals())
         payment=tk.Frame(header,bg=LIGHT); payment.grid(row=2,column=0,columnspan=8,sticky="w",pady=(8,0))
         tk.Label(payment,text="Payment Mode",bg=LIGHT).pack(side="left")
@@ -809,7 +809,8 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         tk.Label(payment,text="Due Date",bg=LIGHT).pack(side="left"); self.date_entry(payment,self.sales_due_date,12).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Amount Paid",bg=LIGHT).pack(side="left"); tk.Entry(payment,textvariable=self.sales_amount_paid,width=12).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Branch",bg=LIGHT).pack(side="left"); self.branch_selector(payment,self.sales_branch,16,False).pack(side="left",padx=(4,10))
-        self.sales_department=tk.StringVar(); self.sales_project=tk.StringVar(); self.dimension_selectors(payment,self.sales_department,self.sales_project)
+        dims=tk.Frame(header,bg=LIGHT); dims.grid(row=4,column=0,columnspan=8,sticky="w",pady=(6,0))
+        self.sales_department=tk.StringVar(); self.sales_project=tk.StringVar(); self.dimension_selectors(dims,self.sales_department,self.sales_project)
         self.sales_payment_method.trace_add("write",lambda *_args:self.sales_payment_changed())
         self.sales_exchange=tk.Label(header,text="",bg=LIGHT,fg="#5f6b76",anchor="w"); self.sales_exchange.grid(row=3,column=0,columnspan=8,sticky="w",pady=(6,0))
         self.sales_currency.trace_add("write",lambda *_args:self.update_sales_totals())
@@ -822,7 +823,7 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         tk.Button(toolbar,text="Save",command=lambda:self.save_sales_invoice(False),bg=NAVY,fg="white",font=("Segoe UI",10,"bold"),border=0,padx=18,pady=7).pack(side="left",padx=(12,3))
         tk.Button(toolbar,text="Save & Post",command=lambda:self.save_sales_invoice(True),bg=GOLD,fg=NAVY,font=("Segoe UI",10,"bold"),border=0,padx=18,pady=7).pack(side="left",padx=3)
         tk.Label(toolbar,text="Open saved invoice",bg=LIGHT).pack(side="left",padx=(18,4))
-        self.sales_open_box=ttk.Combobox(toolbar,textvariable=self.sales_open_choice,width=34); self.sales_open_box.pack(side="left")
+        self.sales_open_box=ttk.Combobox(toolbar,textvariable=self.sales_open_choice,width=26); self.sales_open_box.pack(side="left")
         self.sales_open_box.bind("<<ComboboxSelected>>",lambda _event:self.open_sales_invoice()); self.sales_open_box.bind("<KeyRelease>",self.search_open_sales)
         for text,fmt in (("Excel","xlsx"),("PDF","pdf"),("Print","print")):
             tk.Button(toolbar,text=text,command=lambda f=fmt:self.sales_entry_report(f),bg=NAVY,fg="white",border=0,padx=10,pady=7).pack(side="right",padx=2)
@@ -1138,7 +1139,7 @@ class SaberApp(DimensionsMixin, BrainsScreensMixin, FinalFeaturesMixin, tk.Tk):
         for index,(label,var,width) in enumerate((("Tax Number",self.party_tax,16),("MOF Number",self.party_mof,16),("Address",self.party_address,32),("Contact Number",self.party_contact,16))):
             tk.Label(form,text=label,bg=LIGHT).grid(row=2+index//2,column=(index%2)*2,sticky="w",padx=4,pady=4)
             tk.Entry(form,textvariable=var,width=width).grid(row=2+index//2,column=(index%2)*2+1,sticky="w",padx=4,pady=4)
-        buttons=tk.Frame(form,bg=LIGHT); buttons.grid(row=2,column=4,rowspan=2,columnspan=4,sticky="w",padx=8)
+        buttons=tk.Frame(form,bg=LIGHT); buttons.grid(row=4,column=0,columnspan=6,sticky="w",padx=4,pady=(6,0))
         self.action_button(buttons,"New",self.new_party_account).pack(side="left",padx=3)
         tk.Button(buttons,text="Save",command=self.save_party,bg=GOLD,fg=NAVY,font=("Segoe UI",9,"bold"),border=0,padx=18,pady=7).pack(side="left",padx=3)
         self.action_button(buttons,"Edit Selected",self.edit_selected_party).pack(side="left",padx=3)

@@ -89,7 +89,7 @@ class EditableSheet:
         bbox = self.tree.bbox(iid, f"#{index + 1}")
         if not bbox: return
         row = self.rows[iid]; value = row.get(key, "")
-        editor = tk.Entry(self.tree, justify=self.columns[index][3] if self.columns[index][3] != "center" else "center")
+        editor = tk.Entry(self.tree, justify={"w": "left", "e": "right"}.get(self.columns[index][3], "center"))
         editor.insert(0, "" if value is None else str(value)); editor.place(x=bbox[0], y=bbox[1], width=max(bbox[2], 70), height=bbox[3])
         editor.focus_set(); editor.select_range(0, "end"); done = {"flag": False}
         def commit(move):
@@ -130,15 +130,15 @@ class BrainsScreensMixin:
         header = tk.Frame(page, bg=LIGHT); header.pack(fill="x", padx=10, pady=6)
         self.manual_type = tk.StringVar(value=VOUCHER_TYPES[0]); self.manual_no = tk.StringVar(); self.manual_date = tk.StringVar(value=datetime.now().strftime("%d-%m-%Y"))
         self.manual_currency = tk.StringVar(value="USD"); self.manual_find = tk.StringVar()
-        tk.Label(header, text="Type", bg=LIGHT).pack(side="left"); ttk.Combobox(header, textvariable=self.manual_type, values=VOUCHER_TYPES, state="readonly", width=20).pack(side="left", padx=(4, 12))
+        tk.Label(header, text="Type", bg=LIGHT).pack(side="left"); ttk.Combobox(header, textvariable=self.manual_type, values=VOUCHER_TYPES, state="readonly", width=17).pack(side="left", padx=(4, 8))
         tk.Label(header, text="Number", bg=LIGHT).pack(side="left")
-        tk.Entry(header, textvariable=self.manual_no, width=17, state="readonly", readonlybackground="white", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(4, 12))
+        tk.Entry(header, textvariable=self.manual_no, width=15, state="readonly", readonlybackground="white", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(4, 8))
         tk.Label(header, text="Date", bg=LIGHT).pack(side="left"); self.date_entry(header, self.manual_date, 12).pack(side="left", padx=(4, 12))
-        tk.Label(header, text="Voucher Currency", bg=LIGHT).pack(side="left")
+        tk.Label(header, text="Currency", bg=LIGHT).pack(side="left")
         ttk.Combobox(header, textvariable=self.manual_currency, values=["USD", "LBP", "EUR", "AED"], state="readonly", width=6).pack(side="left", padx=(4, 12))
-        tk.Label(header, text="Branch", bg=LIGHT).pack(side="left"); self.branch_selector(header, self.manual_branch, 14, False).pack(side="left", padx=(4, 12))
+        tk.Label(header, text="Branch", bg=LIGHT).pack(side="left"); self.branch_selector(header, self.manual_branch, 12, False).pack(side="left", padx=(4, 8))
         tk.Label(header, text="Find", bg=LIGHT).pack(side="left")
-        self.manual_find_box = ttk.Combobox(header, textvariable=self.manual_find, width=34); self.manual_find_box.pack(side="left", padx=4)
+        self.manual_find_box = ttk.Combobox(header, textvariable=self.manual_find, width=24); self.manual_find_box.pack(side="left", padx=4)
         self.manual_find_box.bind("<<ComboboxSelected>>", lambda _e: self.open_found_voucher()); self.manual_find_box.bind("<KeyRelease>", self.search_vouchers)
         self.manual_currency.trace_add("write", lambda *_a: self.update_manual_totals())
         self.manual_date.trace_add("write", lambda *_a: self.voucher_date_changed())
@@ -146,28 +146,28 @@ class BrainsScreensMixin:
                    ("amount", "Amount (Account Currency)", 165, "e"), ("amount_lbp", "Amount LBP", 145, "e"), ("amount_usd", "Amount USD", 120, "e"),
                    ("due_date", "Due Date", 95, "center"), ("reference", "Reference", 110, "w"), ("department", "Dep.", 60, "center"), ("project", "Project", 85, "center"),
                    ("rate_lbp", "Rate LBP", 95, "e"), ("rate_usd", "Rate USD", 95, "e")]
-        self.voucher_sheet = EditableSheet(self, page, columns, ["account", "line_currency", "side", "amount", "due_date", "reference", "department", "project", "rate_lbp", "rate_usd"],
-                                           self.voucher_cell_changed, self.voucher_line_selected, height=11, lookup_column="account")
-        self.manual_line_info = tk.Label(page, text="", bg="#dfe6ee", fg=NAVY, anchor="w", font=("Segoe UI", 9, "bold"), padx=8)
-        self.manual_line_info.pack(fill="x", padx=10)
-        bottom = tk.Frame(page, bg=LIGHT); bottom.pack(fill="x", padx=10, pady=6)
-        left = tk.Frame(bottom, bg=LIGHT); left.pack(side="left", fill="both", expand=True)
-        tk.Label(left, text="Details", bg=LIGHT, font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="nw", padx=(0, 6))
-        self.manual_details = tk.Text(left, width=48, height=4, font=("Segoe UI", 9)); self.manual_details.grid(row=0, column=1, sticky="w")
-        line_buttons = tk.Frame(left, bg=LIGHT); line_buttons.grid(row=1, column=1, sticky="w", pady=6)
-        self.action_button(line_buttons, "Add Line", self.add_manual_item).pack(side="left", padx=(0, 4))
-        tk.Button(line_buttons, text="Delete Line", command=self.remove_manual_item, bg=RED, fg="white", border=0, padx=12, pady=7).pack(side="left", padx=4)
-        self.action_button(line_buttons, "Insert Line", self.insert_manual_item).pack(side="left", padx=4)
-        tk.Label(left, text="Double-click a cell to type · F2 in Account No. opens the account list · D/C: type D or C · Currency: USD, LBP, EUR or AED", bg=LIGHT, fg=MUTED).grid(row=2, column=0, columnspan=2, sticky="w")
+        bottom = tk.Frame(page, bg=LIGHT); bottom.pack(side="bottom", fill="x", padx=10, pady=(2, 6))
         totals = tk.LabelFrame(bottom, text="Totals", bg=LIGHT, padx=10, pady=4); totals.pack(side="right")
         tk.Label(totals, text="", bg=LIGHT).grid(row=0, column=0)
-        for column, text in enumerate(("LBP", "USD", "Voucher Currency"), 1): tk.Label(totals, text=text, bg=LIGHT, font=("Segoe UI", 9, "bold")).grid(row=0, column=column, padx=6)
+        for column, text in enumerate(("LBP", "USD", "Voucher Cur."), 1): tk.Label(totals, text=text, bg=LIGHT, font=("Segoe UI", 9, "bold")).grid(row=0, column=column, padx=6)
         self.voucher_total_labels = {}
         for row, name in enumerate(("Debit", "Credit", "Balance"), 1):
             tk.Label(totals, text=name, bg=LIGHT).grid(row=row, column=0, sticky="e", padx=4)
             for column, key in enumerate(("lbp", "usd", "voucher"), 1):
-                label = tk.Label(totals, text="0.00", bg="#dfe6ee", width=17, anchor="e", font=("Segoe UI", 9, "bold")); label.grid(row=row, column=column, padx=3, pady=2)
+                label = tk.Label(totals, text="0.00", bg="#dfe6ee", width=15, anchor="e", font=("Segoe UI", 9, "bold")); label.grid(row=row, column=column, padx=3, pady=2)
                 self.voucher_total_labels[(name, key)] = label
+        left = tk.Frame(bottom, bg=LIGHT); left.pack(side="left", fill="both", expand=True)
+        tk.Label(left, text="Details", bg=LIGHT, font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="nw", padx=(0, 6))
+        self.manual_details = tk.Text(left, width=40, height=3, font=("Segoe UI", 9)); self.manual_details.grid(row=0, column=1, sticky="w")
+        line_buttons = tk.Frame(left, bg=LIGHT); line_buttons.grid(row=1, column=1, sticky="w", pady=3)
+        self.action_button(line_buttons, "Add Line", self.add_manual_item).pack(side="left", padx=(0, 4))
+        tk.Button(line_buttons, text="Delete Line", command=self.remove_manual_item, bg=RED, fg="white", border=0, padx=12, pady=7).pack(side="left", padx=4)
+        self.action_button(line_buttons, "Insert Line", self.insert_manual_item).pack(side="left", padx=4)
+        tk.Label(left, text="Double-click a cell to type · F2 = account list · D/C: D or C · Currency: USD, LBP, EUR, AED", bg=LIGHT, fg=MUTED, wraplength=420, justify="left").grid(row=2, column=0, columnspan=2, sticky="w")
+        self.manual_line_info = tk.Label(page, text="", bg="#dfe6ee", fg=NAVY, anchor="w", font=("Segoe UI", 9, "bold"), padx=8)
+        self.manual_line_info.pack(side="bottom", fill="x", padx=10)
+        self.voucher_sheet = EditableSheet(self, page, columns, ["account", "line_currency", "side", "amount", "due_date", "reference", "department", "project", "rate_lbp", "rate_usd"],
+                                           self.voucher_cell_changed, self.voucher_line_selected, height=6, lookup_column="account")
         self.manual_items = []; self.manual_tree = self.voucher_sheet.tree
         self.load_manual_vouchers(); self.new_manual_voucher(confirm=False)
 
@@ -445,14 +445,14 @@ class BrainsScreensMixin:
             party_box.bind("<<ComboboxSelected>>", lambda _e: self.balance_party_chosen(v)); party_box.bind("<KeyRelease>", lambda _e: self.balance_party_search(v))
         tk.Label(row0, text="Account From", bg=LIGHT).pack(side="left"); self.account_search_box(row0, v["account_from"], 14).pack(side="left", padx=(4, 8))
         tk.Label(row0, text="To", bg=LIGHT).pack(side="left"); self.account_search_box(row0, v["account_to"], 14).pack(side="left", padx=(4, 12))
-        tk.Label(row0, text="Currencies", bg=LIGHT).pack(side="left")
-        for code, var in currencies.items(): tk.Checkbutton(row0, text=code, variable=var, bg=LIGHT).pack(side="left")
+
         row1 = tk.Frame(box, bg=LIGHT); row1.pack(fill="x", pady=(4, 0))
         tk.Label(row1, text="Date From", bg=LIGHT).pack(side="left"); self.date_entry(row1, v["date_from"], 11).pack(side="left", padx=(4, 8))
         tk.Label(row1, text="To", bg=LIGHT).pack(side="left"); self.date_entry(row1, v["date_to"], 11).pack(side="left", padx=(4, 8))
         tk.Label(row1, text="Print Date", bg=LIGHT).pack(side="left"); self.date_entry(row1, v["print_date"], 11).pack(side="left", padx=(4, 8))
         tk.Label(row1, text="Branch", bg=LIGHT).pack(side="left"); self.branch_selector(row1, v["branch"], 14, True).pack(side="left", padx=(4, 8))
         ttk.Combobox(row1, textvariable=v["posting"], values=["Posted only", "Posted + Review", "Review only"], state="readonly", width=15).pack(side="left", padx=4)
+
         options = tk.Frame(box, bg=LIGHT); options.pack(fill="x", pady=(6, 0))
         groups = [("Lines", [("summary", "Summary (Resume)"), ("by_due_date", "By Due Date"), ("reference", "Reference"), ("with_branch", "With Branch")]),
                   ("Accounts", [("detailed", "Detailed Account (statement)"), ("include_zero", "All accounts"), ("order_by_description", "Order by Description"), ("non_zero_only", "Non-zero Balances only")]),
@@ -464,16 +464,19 @@ class BrainsScreensMixin:
             if title == "Grouping":
                 digits = tk.Frame(frame, bg=LIGHT); digits.pack(anchor="w")
                 tk.Label(digits, text="Summary digits", bg=LIGHT).pack(side="left"); ttk.Combobox(digits, textvariable=v["summary_digits"], values=["1", "2", "3", "4", "5", "6"], width=3, state="readonly").pack(side="left", padx=3)
+        row3 = tk.Frame(box, bg=LIGHT); row3.pack(fill="x", pady=(4, 0))
         for title, key, choices in (("1st Column", "first_column", (("account", "Account Currency"), ("LBP", "LBP"), ("USD", "USD"))),
                                     ("2nd Column", "second_column", (("account", "Account Currency"), ("LBP", "LBP"), ("USD", "USD"), ("none", "None")))):
-            frame = tk.LabelFrame(options, text=title, bg=LIGHT, padx=4); frame.pack(side="left", fill="y", padx=(0, 6))
-            for value, label in choices: tk.Radiobutton(frame, text=label, value=value, variable=v[key], bg=LIGHT).pack(anchor="w")
-        actions = tk.Frame(options, bg=LIGHT); actions.pack(side="left", fill="y", padx=6)
+            frame = tk.LabelFrame(row3, text=title, bg=LIGHT, padx=4); frame.pack(side="left", padx=(0, 6))
+            for value, label in choices: tk.Radiobutton(frame, text=label, value=value, variable=v[key], bg=LIGHT).pack(side="left")
+        actions = tk.Frame(row3, bg=LIGHT); actions.pack(side="right", padx=6)
         state = {"vars": v, "flags": flags, "currencies": currencies, "statement": statement, "result": None}
         self.add_dimension_options(state, box)
-        tk.Button(actions, text="Show", command=lambda: self.run_balance_report(state), bg=GOLD, fg=NAVY, border=0, padx=18, pady=6, font=("Segoe UI", 9, "bold")).pack(fill="x", pady=2)
+        tk.Label(state["dimension_row"], text="Currencies", bg=LIGHT).pack(side="left", padx=(10, 0))
+        for code, var in currencies.items(): tk.Checkbutton(state["dimension_row"], text=code, variable=var, bg=LIGHT).pack(side="left")
+        tk.Button(actions, text="Show", command=lambda: self.run_balance_report(state), bg=GOLD, fg=NAVY, border=0, padx=22, pady=7, font=("Segoe UI", 10, "bold")).pack(side="left", padx=3)
         for text, fmt in (("Print", "print"), ("Excel", "xlsx"), ("PDF", "pdf")):
-            self.action_button(actions, text, lambda f=fmt: self.export_balance_report(state, f)).pack(fill="x", pady=2)
+            self.action_button(actions, text, lambda f=fmt: self.export_balance_report(state, f)).pack(side="left", padx=3)
         state["info"] = tk.Label(page, text="Choose the options and press Show.", bg=LIGHT, fg=MUTED, anchor="w"); state["info"].pack(fill="x", padx=12)
         state["viewer"] = self.report_viewer(page)
         return state
