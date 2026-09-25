@@ -121,34 +121,58 @@ def print_rows(title, headers, rows):
     return handle.name
 
 def export_invoice_pdf(path, invoice, items, logo_path=None, company=None):
-    doc=SimpleDocTemplate(str(path),pagesize=A4,rightMargin=16*mm,leftMargin=16*mm,topMargin=12*mm,bottomMargin=12*mm)
-    styles=getSampleStyleSheet(); story=[]
-    if logo_path and os.path.exists(str(logo_path)):
-        story.append(Image(str(logo_path),width=38*mm,height=38*mm))
+    """Invoice / debit note / credit note: Item, Description, Qty, Unit, Unit Price, Discount, Total; then Total, Discount,
+    Total HT, VAT 11% (struck through for exports), Total, and the amount in words in English and Arabic."""
+    from reportlab.lib.styles import ParagraphStyle
+    from tafqeet import amount_in_words
+    doc=SimpleDocTemplate(str(path),pagesize=A4,rightMargin=14*mm,leftMargin=14*mm,topMargin=12*mm,bottomMargin=12*mm)
+    styles=getSampleStyleSheet(); story=[]; money=lambda v: f"{float(v or 0):,.2f}"
+    if logo_path and os.path.exists(str(logo_path)): story.append(Image(str(logo_path),width=32*mm,height=32*mm))
     company=company or {}; company_name=company.get("company_name") or "SABER FOR AUDIT"
-    company_line=" | ".join(value for value in (company.get("company_address") or "Zouk Mosbeh, Keserwan, Lebanon",company.get("company_phone") or "+961 70 636729",company.get("company_email") or "bassam.saber@saberforaudit.com",company.get("company_website") or "saberforaudit.com",("MOF: "+company["company_mof"]) if company.get("company_mof") else "") if value)
-    story.extend([
-        pdf_paragraph(company_name if has_arabic(company_name) else company_name.upper(),styles["Title"],True),
-        Paragraph("Accounting & Management Consulting",styles["Heading3"]),
-        pdf_paragraph(company_line,styles["Normal"]),
-        Spacer(1,6*mm),
-        Paragraph(f'{invoice["kind"].title()} Invoice {invoice["invoice_number"]}',styles["Heading1"]),
-        Paragraph(f'Date: {invoice["invoice_date"]} &nbsp;&nbsp; Due: {invoice.get("due_date") or "-"} &nbsp;&nbsp; Currency: {invoice["currency"]}',styles["Normal"]),
-        pdf_paragraph(f'Customer / Supplier: {invoice["party_name"]}',styles["Normal"]),
-        Paragraph(f'Payment: {invoice.get("payment_status","unpaid").title()}',styles["Normal"]),
-        Spacer(1,6*mm),
-    ])
-    headers=["Description","Qty","Unit Price","Before VAT","VAT %","VAT","Total"]
-    description_style=styles["Normal"].clone("invoice-description",fontSize=8,leading=10)
-    rows=[[pdf_paragraph(x["description"],description_style),x["quantity"],x["unit_price"],x["subtotal"],x["vat_rate"],x["vat"],x["total"]] for x in items]
-    if not rows: rows=[["Invoice total","1",invoice["subtotal"],invoice["subtotal"],"",invoice["vat"],invoice["total"]]]
-    table=Table([headers]+rows,repeatRows=1,colWidths=[65*mm,14*mm,23*mm,25*mm,16*mm,22*mm,24*mm])
-    table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#071B2E")),("TEXTCOLOR",(0,0),(-1,0),colors.white),
-        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("GRID",(0,0),(-1,-1),.4,colors.grey),("FONTSIZE",(0,0),(-1,-1),8),
-        ("ALIGN",(1,1),(-1,-1),"RIGHT"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F3F6F8")])]))
-    story.extend([table,Spacer(1,7*mm),Paragraph(f'Before VAT: {invoice["subtotal"]} &nbsp;&nbsp; VAT: {invoice["vat"]} &nbsp;&nbsp; Total: {invoice["total"]} {invoice["currency"]}',styles["Heading2"]),
-        Paragraph(f'Amount Paid: {invoice.get("amount_paid",0)} &nbsp;&nbsp; Outstanding: {invoice.get("outstanding",invoice["total"])}',styles["Normal"]),Spacer(1,10*mm),
-        Paragraph("Thank you for your business.",styles["Normal"])])
+    company_line=" | ".join(value for value in (company.get("company_address"),company.get("company_phone"),company.get("company_email"),company.get("company_website")) if value)
+    subtype=str(invoice.get("doc_subtype") or "invoice"); kind=str(invoice.get("kind") or "sale")
+    title={"credit_note":"CREDIT NOTE | إشعار دائن","debit_note":"DEBIT NOTE | إشعار مدين"}.get(subtype,"TAX INVOICE | فاتورة ضريبية" if kind=="sale" else "PURCHASE INVOICE | فاتورة شراء")
+    story.extend([pdf_paragraph(company_name if has_arabic(company_name) else company_name.upper(),styles["Title"],True)])
+    if company_line: story.append(pdf_paragraph(company_line,styles["Normal"]))
+    if company.get("company_mof"): story.append(Paragraph(f'MOF / VAT No.: {company["company_mof"]}',styles["Normal"]))
+    story.extend([Spacer(1,5*mm),pdf_paragraph(title,styles["Heading1"],True)])
+    info=[["Number",invoice["invoice_number"],"Date",invoice["invoice_date"]],["Customer" if kind=="sale" else "Supplier",invoice.get("party_name") or "","Due Date",invoice.get("due_date") or "-"],
+          ["Currency",invoice["currency"],"Payment",str(invoice.get("payment_method") or invoice.get("payment_status") or "").title()]]
+    cell=ParagraphStyle("inv-cell",parent=styles["Normal"],fontSize=8.5,leading=10.5)
+    info_table=Table([[pdf_paragraph(str(v),cell,i % 2 == 0) for i,v in enumerate(row)] for row in info],colWidths=[26*mm,70*mm,24*mm,62*mm])
+    info_table.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.3,colors.HexColor("#c9cfd6")),("BACKGROUND",(0,0),(0,-1),colors.HexColor("#F3F6F8")),("BACKGROUND",(2,0),(2,-1),colors.HexColor("#F3F6F8"))]))
+    story.extend([info_table,Spacer(1,5*mm)])
+    headers=["Item","Description","Qty","Unit","Unit Price","Discount","Total"]
+    rows=[]; gross_total=0.0
+    for x in items:
+        qty=float(x.get("quantity") or 0); price=float(x.get("unit_price") or 0); gross=float(x.get("gross_amount") or qty*price)
+        percent=float(x.get("discount_percent") or 0); discount=float(x.get("discount_amount") or 0) or gross*percent/100
+        net=gross-discount; gross_total+=net
+        rows.append([x.get("item_code") or "",pdf_paragraph(x["description"],cell),f"{qty:g}",x.get("unit") or "",money(price),(f"{percent:g}%" if percent else money(discount) if discount else ""),money(net)])
+    if not rows: rows=[["","Invoice total","1","",money(invoice["subtotal"]),"",money(invoice["subtotal"])]]; gross_total=float(invoice["subtotal"] or 0)
+    table=Table([headers]+rows,repeatRows=1,colWidths=[22*mm,66*mm,14*mm,14*mm,23*mm,19*mm,24*mm])
+    table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#071B2E")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+        ("GRID",(0,0),(-1,-1),.4,colors.grey),("FONTSIZE",(0,0),(-1,-1),8.5),("ALIGN",(2,1),(-1,-1),"RIGHT"),("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F3F6F8")])]))
+    story.extend([table,Spacer(1,4*mm)])
+    discount_percent=float(invoice.get("invoice_discount_percent") or 0); discount_amount=float(invoice.get("invoice_discount_amount") or 0)
+    if not discount_amount and discount_percent: discount_amount=gross_total*discount_percent/100
+    subtotal=float(invoice.get("subtotal") or 0); vat=float(invoice.get("vat") or 0); total=float(invoice.get("total") or subtotal+vat)
+    export=invoice.get("vat_treatment") in ("zero_rated","exempt")
+    vat_label="VAT 11%" if not export else "<strike>VAT 11%</strike>&nbsp; Export - zero rated (Art. 19)" if invoice.get("vat_treatment")=="zero_rated" else "<strike>VAT 11%</strike>&nbsp; Exempt (Art. 16-17)"
+    bold=ParagraphStyle("inv-total",parent=styles["Normal"],fontName="Helvetica-Bold",fontSize=10,alignment=2)
+    plain=ParagraphStyle("inv-total-plain",parent=styles["Normal"],fontSize=9.5,alignment=2)
+    totals=[[Paragraph("Total",plain),Paragraph(money(gross_total),plain)]]
+    if discount_amount: totals.append([Paragraph(f"Discount{f' {discount_percent:g}%' if discount_percent else ''}",plain),Paragraph("- "+money(discount_amount),plain)])
+    totals+= [[Paragraph("Total HT (before VAT)",bold),Paragraph(money(subtotal),bold)],[Paragraph(vat_label,plain),Paragraph(money(vat),plain)],
+              [Paragraph(f"TOTAL {invoice['currency']}",bold),Paragraph(money(total),bold)]]
+    totals_table=Table(totals,colWidths=[60*mm,32*mm],hAlign="RIGHT")
+    totals_table.setStyle(TableStyle([("LINEABOVE",(0,-1),(-1,-1),1,colors.HexColor("#071B2E")),("BACKGROUND",(0,-1),(-1,-1),colors.HexColor("#E8EDF2")),("TOPPADDING",(0,0),(-1,-1),2)]))
+    words=amount_in_words(total,invoice["currency"])
+    story.extend([totals_table,Spacer(1,5*mm),Paragraph(f"<b>Amount in words:</b> {words['en']}",styles["Normal"]),pdf_paragraph(words["ar"],styles["Normal"]),Spacer(1,4*mm)])
+    if invoice.get("notes"): story.append(pdf_paragraph(f'Notes: {invoice["notes"]}',styles["Normal"]))
+    if float(invoice.get("amount_paid") or 0): story.append(Paragraph(f'Amount paid: {money(invoice.get("amount_paid"))} &nbsp;&nbsp; Outstanding: {money(invoice.get("outstanding",total))}',styles["Normal"]))
+    story.extend([Spacer(1,10*mm),Table([["Prepared by","Approved by","Received by"]],colWidths=[60*mm,60*mm,60*mm],style=[("LINEABOVE",(0,0),(-1,0),.5,colors.grey),("FONTSIZE",(0,0),(-1,-1),8),("ALIGN",(0,0),(-1,-1),"CENTER")])])
     doc.build(story)
 
 

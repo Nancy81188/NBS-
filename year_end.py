@@ -12,8 +12,8 @@ from decimal import Decimal
 
 from database import iso_date, utcnow
 
-PROFIT_ACCOUNT = "121"
-LOSS_ACCOUNT = "125"
+PROFIT_ACCOUNT = "138"  # Current Year Results - Profits
+LOSS_ACCOUNT = "139"    # Current Year Results - Losses
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
 

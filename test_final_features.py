@@ -153,7 +153,7 @@ class QuarterlyVatTest(unittest.TestCase):
     def test_non_deductible_reclass_keeps_ledger_equal_to_return(self):
         balance = {row["code"]: row["closing_balance"] for row in self.db.trial_balance()}
         result = vat_return.build_vat_return(self.db, 2025, 1)
-        self.assertAlmostEqual(balance["442660000"], float(result["per_currency"]["USD"]["total_input"]["vat"]), places=2)
+        self.assertAlmostEqual(balance["44210"] + balance["44216"], float(result["per_currency"]["USD"]["total_input"]["vat"]), places=2)
         self.assertAlmostEqual(sum(r["debit"] - r["credit"] for r in self.db.journal()), 0, places=2)
         self.db.set_vat_recoverable("invoice", self.car, True, self.user)
         self.assertEqual(float(vat_return.build_vat_return(self.db, 2025, 1)["per_currency"]["USD"]["purchases"]["vat"]), 55)
@@ -466,7 +466,7 @@ class YearEndClosingTest(unittest.TestCase):
         tb = ledger_reports.build_account_report(next_year, {"first_column": "account", "second_column": "LBP"})
         usd = next(s for s in tb["sections"] if s["heading"].endswith("USD"))["rows"]
         balances = {r[0]: (float(r[-4]), float(r[-1])) for r in usd}
-        self.assertEqual(balances["121"], (-700, -62650000)); self.assertEqual(balances[self.party["account_number"]], (1110, 99345000))
+        self.assertEqual(balances["138"], (-700, -62650000)); self.assertEqual(balances[self.party["account_number"]], (1110, 99345000))
         self.assertNotIn("713", balances); self.assertEqual(balances["GRAND TOTAL"], (0, 0))
         with self.assertRaisesRegex(ValueError, "already closed"): self.manager.close_and_open_year(self.company, 2024, 1)
 
@@ -478,7 +478,7 @@ class YearEndClosingTest(unittest.TestCase):
         refreshed = self.manager.refresh_opening(self.company, 2024, 1)
         self.assertTrue(refreshed["provisional"])
         lines = {(e["currency"], e["account_code"]): e["debit"] - e["credit"] for e in self.manager.database(self.company, 2025).journal() if e["source_type"] == "opening"}
-        self.assertEqual(lines[("USD", "121")], -700); self.assertEqual(lines[("LBP", "121")], -8950000)
+        self.assertEqual(lines[("USD", "138")], -700); self.assertEqual(lines[("LBP", "138")], -8950000)
         self.assertNotIn(("USD", "713"), lines)
 
 class LebanesePayrollRulesTest(unittest.TestCase):
@@ -516,7 +516,7 @@ class LebanesePayrollRulesTest(unittest.TestCase):
         self.assertEqual(json_notes := __import__("json").loads(saved["compliance_notes"]), json_notes)
         self.db.post_payroll(saved["id"], self.user)
         self.assertAlmostEqual(sum(r["debit"] - r["credit"] for r in self.db.journal()), 0, places=2)
-        nssf = [r for r in self.db.journal() if r["account_code"] == "447100001"]
+        nssf = [r for r in self.db.journal() if r["account_code"] == "4431"]
         self.assertAlmostEqual(sum(r["debit"] for r in nssf), 62.18, places=2)
 
 class LebaneseVatLawTest(unittest.TestCase):
@@ -660,7 +660,7 @@ class ArabicPdfAndNssfTest(unittest.TestCase):
         self.assertEqual(result["net_payable_lbp"], 145825000); self.assertIn("1234567", result["meta"][0])
         payment = self.db.record_nssf_payment({"amount": str(result["net_payable_lbp"]), "payment_date": "15-10-2025", "cash_account": "531", "reference": "NSSF-778", "period_label": result["period_label"]}, self.user)
         lines = [(r["account_code"], r["debit"], r["credit"]) for r in self.db.journal() if r["entry_number"] == payment["voucher"]]
-        self.assertEqual(lines, [("447100001", 145825000.0, 0.0), ("531", 0.0, 145825000.0)])
+        self.assertEqual(lines, [("4431", 145825000.0, 0.0), ("531", 0.0, 145825000.0)])
 
     def test_arabic_text_in_pdf(self):
         from report_export import shape_arabic, has_arabic, arabic_fonts, export_sections_pdf, export_invoice_pdf
@@ -684,6 +684,70 @@ class ArabicPdfAndNssfTest(unittest.TestCase):
         database = CompanyManager(Path(self.folder.name) / "master.db").database(company["id"], 2024)
         database.create_manual_invoice({"invoice_date": "10-02-2024", "party_name": "X", "kind": "sales", "currency": "USD", "status": "posted"}, [{"description": "a", "quantity": 1, "unit_price": 10}], 1)
         self.assertEqual(inventory.list_documents(database), []); self.assertEqual(len(database.list_invoices()), 1)
+
+class Version22Test(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); self.db, self.user = new_db(self.folder.name)
+        self.client_party = self.db.save_party({"kind": "customer", "name": "Client A", "account_category": "client"}, self.user)
+        self.db.save_party({"kind": "supplier", "name": "Supplier A", "account_category": "supplier"}, self.user)
+
+    def tearDown(self): self.folder.cleanup()
+
+    def test_calculation_tafqeet_and_accounts(self):
+        import invoice_calc, tafqeet
+        result = invoice_calc.calculate([{"quantity": 10, "unit_price": 120}, {"quantity": 1, "unit_price": 300, "discount_percent": 10}], invoice_discount_percent=10)
+        self.assertEqual((result["total"], result["discount"], result["total_ht"], result["vat"], result["grand_total"]), (1470, 147, 1323, 145.53, 1468.53))
+        self.assertEqual(invoice_calc.calculate([{"quantity": 5, "unit_price": 150}], zero_vat=True)["vat"], 0)
+        words = tafqeet.amount_in_words(1332, "USD")
+        self.assertEqual(words["en"], "One thousand three hundred thirty-two US Dollars only"); self.assertTrue(words["ar"].startswith("فقط ألف وثلاثمئة"))
+        codes = {a["code"] for a in self.db.list_accounts()}
+        self.assertTrue({"44210", "44211", "44216", "4427", "6311", "6312", "6313", "6315", "6316", "6319", "4411", "4431", "138", "139", "601800001"}.issubset(codes))
+        self.assertEqual(self.db.default_payroll_account_map()["commission"], "6313")
+
+    def test_credit_note_allocation_and_vat(self):
+        import invoice_calc
+        calc = invoice_calc.calculate([{"description": "Panels", "quantity": 10, "unit_price": 100}])
+        invoice = self.db.create_manual_invoice({"invoice_date": "10-02-2026", "party_name": "Client A", "kind": "sales", "currency": "USD", "status": "posted"}, calc["lines"], self.user)
+        note = invoice_calc.calculate([{"description": "Return", "quantity": 1, "unit_price": 100}])
+        credit = self.db.create_manual_invoice({"invoice_date": "12-02-2026", "party_name": "Client A", "kind": "sales", "currency": "USD", "status": "posted", "doc_subtype": "credit_note",
+            "invoice_number": self.db.next_invoice_number("credit_note", "12-02-2026"), "supplier_side": "C - Credit", "vat_side": "D - Debit", "expense_side": "D - Debit"}, note["lines"], self.user)
+        rows = {r["id"]: r for r in self.db.list_invoices()}
+        self.assertEqual((rows[credit]["invoice_number"], rows[credit]["doc_subtype"]), ("CN-2026-000001", "credit_note"))
+        vat = vat_return.build_vat_return(self.db, 2026, 1)["per_currency"]["USD"]["sales"]["vat"]
+        self.assertEqual(float(vat), 110 - 11)  # the credit note reduces the output VAT
+        payment = self.db.add_payment({"kind": "customer_receipt", "party_id": self.client_party["id"], "payment_date": "20-02-2026", "currency": "USD", "amount": "500"}, self.user)
+        self.db.save_allocations(payment, [{"invoice_id": invoice, "amount": 500}], self.user)
+        open_items = {d["id"]: d["open_amount"] for d in self.db.open_documents(self.client_party["id"])}
+        self.assertEqual((open_items[invoice], open_items[credit]), (610, -111))
+        with self.assertRaisesRegex(ValueError, "more than the payment"): self.db.save_allocations(payment, [{"invoice_id": invoice, "amount": 600}], self.user)
+
+    def test_landed_cost_accounts_and_closing_to_138(self):
+        purchase = self.db.create_manual_invoice({"invoice_date": "15-03-2026", "party_name": "Supplier A", "kind": "purchases", "currency": "USD", "status": "posted"},
+                                                 [{"description": "Goods", "quantity": 1, "unit_price": 1000, "vat_rate": 11}], self.user)
+        self.db.add_landed_cost(purchase, {"freight": "120", "customs_duties": "200", "import_vat": "35"}, self.user)
+        balances = {r["code"]: r["closing_balance"] for r in self.db.trial_balance()}
+        self.assertEqual((balances["601800001"], balances["601800003"], balances["44210"]), (120, 200, 110 + 35))
+        self.db.create_manual_invoice({"invoice_date": "20-03-2026", "party_name": "Client A", "kind": "sales", "currency": "USD", "status": "posted"}, [{"description": "S", "quantity": 1, "unit_price": 2000}], self.user)
+        result = year_end.close_year(self.db, 2026, self.user)
+        closing = [r for r in self.db.journal() if (r["description"] or "").startswith("CLOSING 6&7")]
+        self.assertTrue(closing); self.assertIn("138", {r["account_code"] for r in closing}); self.assertEqual(result["net_results"]["USD"], 680)
+
+    def test_items_categories_physical_count_and_templates(self):
+        from importer import write_invoice_template, read_invoice_lines
+        inventory.save_category(self.db, {"kind": "subcategory", "name": "HPL", "parent": "Cladding"}, self.user)
+        inventory.save_category(self.db, {"kind": "unit", "name": "panel"}, self.user)
+        data = inventory.list_categories(self.db); self.assertEqual(data["categories"][0]["subcategories"], ["HPL"]); self.assertIn("panel", data["units"])
+        item = inventory.find_or_create_item(self.db, "HPL Panel 8mm", "panel", None, self.user)
+        self.assertEqual(inventory.find_or_create_item(self.db, "hpl panel 8mm", "panel", None, self.user)["id"], item["id"])  # found, not duplicated
+        inventory.save_item(self.db, {**item, "category": "Cladding", "subcategory": "HPL", "supplier_name": "Supplier A"}, self.user)
+        inventory.save_document(self.db, {"doc_type": "receipt", "doc_date": "01-03-2026", "warehouse_id": "MAIN"}, [{"sku": item["sku"], "quantity": 40, "unit_cost": 80}], self.user)
+        count = inventory.save_count(self.db, {"count_date": "31-03-2026", "warehouse_id": 1}, [{"item_id": item["id"], "sku": item["sku"], "counted": 37}], self.user, post=True)
+        self.assertEqual(count["status"], "posted"); self.assertEqual(inventory.list_items(self.db)[0]["quantity"], 37)
+        report = inventory.build_report(self.db, "valuation", {"date_to": "31-12-2026", "subcategory": "HPL", "supplier_id": inventory.list_items(self.db)[0]["supplier_id"]})
+        self.assertEqual(report["sections"][0]["rows"][0][0], item["sku"])
+        path = Path(self.folder.name) / "sales.xlsx"; write_invoice_template(path, "sales")
+        invoices = read_invoice_lines(path, "sales")
+        self.assertEqual([(i["invoice_number"], len(i["lines"])) for i in invoices], [("INV-001", 2), ("INV-002", 1)])
 
 class StandaloneEndToEndTest(unittest.TestCase):
     """Runs the embedded data service exactly as the installed app does and drives it through the API."""

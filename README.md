@@ -190,3 +190,37 @@ Payroll > Official Reports > "NSSF - Contributions statement (payment)", monthly
 
 ## Fix
 Company files created by older versions are brought up to date automatically when they are opened.
+
+# Version 2.2.0
+
+## Sales Invoice, Debit Note, Credit Note
+- Document type: Invoice (SAL-), Debit Note (DN-), Credit Note (CN-, reverses the sale and reduces the VAT of the period).
+- Lines: Item, Description, Qty, Unit, Unit Price, Total Amount, Discount %, VAT %, Net.
+- Totals: Total, Discount (% or amount), **Total HT**, VAT 11% (struck through for zero-rated / exempt), TOTAL, and the **amount in words** in English and Arabic (tafqeet).
+- Find by number only (type 12 for SAL-2026-000012), Duplicate, Print Preview, PDF, Print, Import Excel (template provided), Import PDF, Excel Template.
+
+## General Journal
+Find by voucher number and by details; Print Preview, PDF and Print.
+
+## Payment & Receipt
+Cash / bank accounts from 511, 512, 519 and 53 only; customers and suppliers in both tabs; **allocation** of each receipt / payment to open invoices (auto: oldest first), open balance per document.
+
+## Purchases & Expenses
+- Find instead of the lists. Purchases: items received into stock with warehouse (F2 item search; an item that does not exist is created automatically), Excel import with template, PDF.
+- Cost on purchase: each cost to its own 9-digit 6018 account (601800001 freight, 601800002 insurance, 601800003 customs duties, 601800004 broker, 601800005 other); import VAT to 44210.
+- Expense account chosen from accounts 626 to 69.
+
+## Accounts
+VAT: 44210 purchases, 44211 export-related purchases, 44216 expenses, 4427 sales. Payroll: 6311 salaries, 6312 bonus / 13th, 6313 commission, 6315 schooling, 6316 managers' salaries, 6319 transport, 4411 salary tax, 4431 NSSF.
+Year-end result to **138** (profit) / **139** (loss); the closing voucher is "CLOSING 6&7" in the General Journal.
+
+## Inventory
+Items with cost price (average of purchases), supplier, category / subcategory, unit and location. New tabs: Categories & Units, Stock In / Stock Out (at average cost), Physical Inventory (stock on hand, count, difference, save, print, Excel sheet, upload, post the differences). Reports filter by category, subcategory, unit, supplier and warehouse together.
+
+## F2
+F2 opens the list that fits the field: items in item fields, customers / suppliers in party fields, accounts elsewhere.
+
+# Version 2.3.0 - Statement of Account / Trial Balance
+- Account From / To: search by number or name among all accounts (parents too); the account name shows beside each box (like BRAINS). "Same as From" copies the account.
+- The options are in their own "Options" tab; every Show opens its own full-page tab with Print Preview, Print, Excel, PDF and Close Tab. Several statements can stay open side by side.
+- Double-click a statement line to see the transaction (all its lines) and "Open in its screen" (journal voucher, sales invoice, purchase, receipt / payment, expense). In the Trial Balance, double-click an account to open its statement in a new tab.

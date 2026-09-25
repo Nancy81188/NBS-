@@ -232,4 +232,14 @@ class ApiClient:
     def inventory_report(self,report,options): return self.request("GET","/api/inventory/report?"+urlencode({"report":report,"options":json.dumps(options)}))
     def post_stock_variation(self,year): return self.request("POST","/api/inventory/stock-variation",{"year":year})
     def record_nssf_payment(self,item): return self.request("POST","/api/payroll/nssf-payment",item)
+    def open_documents(self,party_id): return self.request("GET",f"/api/parties/{party_id}/open-documents")["items"]
+    def payment_allocations(self,payment_id): return self.request("GET",f"/api/payments/{payment_id}/allocations")["items"]
+    def save_allocations(self,payment_id,allocations): return self.request("POST",f"/api/payments/{payment_id}/allocations",{"allocations":allocations})["items"]
+    def item_categories(self): return self.request("GET","/api/inventory/categories")
+    def save_item_category(self,item): return self.request("POST","/api/inventory/categories",item)
+    def count_sheet(self,warehouse_id,date): return self.request("GET","/api/inventory/count-sheet?"+urlencode({"warehouse_id":warehouse_id,"date":date}))["items"]
+    def physical_counts(self): return self.request("GET","/api/inventory/counts")["items"]
+    def physical_count(self,count_id): return self.request("GET",f"/api/inventory/counts/{count_id}")
+    def save_physical_count(self,header,lines,count_id=None,post=False): return self.request("POST","/api/inventory/counts",{"header":header,"lines":lines,"id":count_id,"post":post})
+    def find_or_create_item(self,name,unit="unit",sku=None,supplier_id=None): return self.request("POST","/api/inventory/find-or-create",{"name":name,"unit":unit,"sku":sku,"supplier_id":supplier_id})["item"]
 

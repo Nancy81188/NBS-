@@ -416,6 +416,14 @@ class BrainsScreensMixin:
         self.output_sections(title, meta, sections, title.replace(" ", "_"), format_name)
 
     def output_sections(self, title, meta, sections, name, format_name):
+        if format_name == "preview":
+            handle = tempfile.NamedTemporaryFile(prefix=f"{name}_", suffix=".pdf", delete=False); handle.close()
+            try:
+                export_sections_pdf(handle.name, title, meta, sections)
+                if os.name != "nt": raise RuntimeError("The preview opens in the Windows application")
+                os.startfile(handle.name)
+            except Exception as exc: messagebox.showinfo(title, f"The PDF is ready: {handle.name}\n{exc}")
+            return
         if format_name == "print":
             handle = tempfile.NamedTemporaryFile(prefix="SaberAccounting_", suffix=".pdf", delete=False); handle.close()
             try:
@@ -428,6 +436,8 @@ class BrainsScreensMixin:
 
     # ================================================================ Balance des Comptes
     def build_balance_panel(self, page, statement=False):
+        notebook = ttk.Notebook(page); notebook.pack(fill="both", expand=True, padx=6, pady=4)
+        options_page = tk.Frame(notebook, bg=LIGHT); notebook.add(options_page, text="  Options  "); page = options_page
         year = getattr(self, "current_fiscal_year", datetime.now().year)
         v = {"account_from": tk.StringVar(), "account_to": tk.StringVar(), "date_from": tk.StringVar(value=f"01-01-{year}"), "date_to": tk.StringVar(value=f"31-12-{year}"),
              "print_date": tk.StringVar(value=datetime.now().strftime("%d-%m-%Y")), "branch": tk.StringVar(value="All Branches"), "summary_digits": tk.StringVar(value="4"),
@@ -443,8 +453,14 @@ class BrainsScreensMixin:
             tk.Label(row0, text="Customer / Supplier", bg=LIGHT, font=("Segoe UI", 9, "bold")).pack(side="left")
             party_box = ttk.Combobox(row0, textvariable=v["party"], width=34); party_box.pack(side="left", padx=(4, 12)); v["party_box"] = party_box
             party_box.bind("<<ComboboxSelected>>", lambda _e: self.balance_party_chosen(v)); party_box.bind("<KeyRelease>", lambda _e: self.balance_party_search(v))
-        tk.Label(row0, text="Account From", bg=LIGHT).pack(side="left"); self.account_search_box(row0, v["account_from"], 14).pack(side="left", padx=(4, 8))
-        tk.Label(row0, text="To", bg=LIGHT).pack(side="left"); self.account_search_box(row0, v["account_to"], 14).pack(side="left", padx=(4, 12))
+        rows_box = tk.Frame(box, bg=LIGHT); rows_box.pack(fill="x", pady=(4, 0))
+        for label, key in (("Account From", "account_from"), ("Account To", "account_to")):
+            line = tk.Frame(rows_box, bg=LIGHT); line.pack(fill="x", pady=1)
+            tk.Label(line, text=label, bg=LIGHT, width=12, anchor="w", font=("Segoe UI", 9, "bold")).pack(side="left")
+            self.account_range_box(line, v[key], v.setdefault(f"{key}_name", tk.StringVar())).pack(side="left", padx=(4, 6))
+            tk.Label(line, textvariable=v[f"{key}_name"], bg="#dfe6ee", fg=NAVY, width=46, anchor="w", padx=6).pack(side="left")
+            if key == "account_from":
+                tk.Button(line, text="Same as From  >", command=lambda: v["account_to"].set(v["account_from"].get()), bg=NAVY, fg="white", border=0, padx=8).pack(side="left", padx=8)
 
         row1 = tk.Frame(box, bg=LIGHT); row1.pack(fill="x", pady=(4, 0))
         tk.Label(row1, text="Date From", bg=LIGHT).pack(side="left"); self.date_entry(row1, v["date_from"], 11).pack(side="left", padx=(4, 8))
@@ -477,9 +493,110 @@ class BrainsScreensMixin:
         tk.Button(actions, text="Show", command=lambda: self.run_balance_report(state), bg=GOLD, fg=NAVY, border=0, padx=22, pady=7, font=("Segoe UI", 10, "bold")).pack(side="left", padx=3)
         for text, fmt in (("Print", "print"), ("Excel", "xlsx"), ("PDF", "pdf")):
             self.action_button(actions, text, lambda f=fmt: self.export_balance_report(state, f)).pack(side="left", padx=3)
-        state["info"] = tk.Label(page, text="Choose the options and press Show.", bg=LIGHT, fg=MUTED, anchor="w"); state["info"].pack(fill="x", padx=12)
-        state["viewer"] = self.report_viewer(page)
+        state["info"] = tk.Label(page, text="Choose the options and press Show. Each Show opens its own tab; double-click a line to open the transaction.", bg=LIGHT, fg=MUTED, anchor="w")
+        state["info"].pack(fill="x", padx=12)
+        state["notebook"] = notebook; state["options_page"] = options_page
+        notebook.bind("<<NotebookTabChanged>>", lambda _e: self.result_tab_changed(state)); state["tabs"] = {}
+        state["viewer"] = None
         return state
+
+    def account_range_box(self, parent, variable, name_variable):
+        """All accounts (parents too), searched by number or name; the account name shows beside the box."""
+        if not getattr(self, "_all_accounts", None):
+            try: self._all_accounts = {str(a["code"]): a["name_en"] for a in self.client.accounts()}
+            except Exception: self._all_accounts = {}
+        choices = [f"{code} - {name}" for code, name in sorted(self._all_accounts.items())]
+        box = ttk.Combobox(parent, textvariable=variable, values=choices, width=16)
+        def show_name(*_args):
+            code = variable.get().split(" - ", 1)[0].strip()
+            name_variable.set(self._all_accounts.get(code, "" if not code else "(account not found)"))
+        def search(event=None):
+            if event is not None and event.keysym in ("Up", "Down", "Return", "Escape", "Tab"): return
+            typed = variable.get().strip().casefold()
+            box["values"] = [c for c in choices if typed in c.casefold()] if typed else choices
+            show_name()
+        def choose(_event=None):
+            value = variable.get()
+            if " - " in value: variable.set(value.split(" - ", 1)[0].strip())
+            show_name()
+        box.bind("<KeyRelease>", search); box.bind("<<ComboboxSelected>>", choose); box.bind("<FocusOut>", choose); box.bind("<Return>", choose)
+        box._f2 = lambda: (self.open_account_lookup(variable), None)[1]
+        variable.trace_add("write", show_name); show_name()
+        return box
+
+    def new_result_tab(self, state, title):
+        frame = tk.Frame(state["notebook"], bg=LIGHT); state["notebook"].add(frame, text=f"  {title[:34]}  ")
+        bar = tk.Frame(frame, bg=LIGHT); bar.pack(fill="x", padx=10, pady=(6, 0))
+        tk.Button(bar, text="Close Tab", command=lambda: self.close_result_tab(state), bg=RED, fg="white", border=0, padx=10, pady=5).pack(side="right", padx=2)
+        for text, fmt in (("PDF", "pdf"), ("Excel", "xlsx"), ("Print", "print"), ("Print Preview", "preview")):
+            tk.Button(bar, text=text, command=lambda f=fmt: self.export_balance_report(state, f), bg=NAVY, fg="white", border=0, padx=10, pady=5).pack(side="right", padx=2)
+        tk.Button(bar, text="< Options", command=lambda: state["notebook"].select(state["options_page"]), bg=GOLD, fg=NAVY, border=0, padx=10, pady=5).pack(side="right", padx=(2, 10))
+        info = tk.Label(bar, text="", bg=LIGHT, fg=NAVY, anchor="w", font=("Segoe UI", 9, "bold")); info.pack(side="left", fill="x", expand=True)
+        viewer = self.report_viewer(frame, [95, 130, 330, 110, 110, 110, 110, 115, 115, 115]); viewer.bind("<Double-1>", lambda event: self.open_report_line(state, viewer, event)); viewer._info = info
+        tk.Label(frame, text="Double-click a line to open the transaction (statement) or the statement of the account (trial balance).", bg=LIGHT, fg=MUTED).pack(anchor="w", padx=12, pady=(0, 4))
+        state["notebook"].select(frame); return frame, viewer
+
+    def result_tab_changed(self, state):
+        current = state["notebook"].select()
+        if current in state["tabs"]: state["result"], state["viewer"] = state["tabs"][current]
+
+    def close_result_tab(self, state):
+        current = state["notebook"].select()
+        if not current or current == str(state["options_page"]): return
+        state["tabs"].pop(current, None); state["notebook"].forget(current)
+        if not state["notebook"].tabs(): state["result"] = None; state["viewer"] = None
+
+    def open_report_line(self, state, viewer, event):
+        values = viewer.item(viewer.identify_row(event.y), "values")
+        if not values: return
+        result = state.get("result") or {}
+        detailed = result.get("title", "").startswith(("Statement", "Detailed"))
+        if detailed and len(values) > 1 and values[1] and values[1] not in ("Voucher",):
+            return self.open_transaction(str(values[1]))
+        code = str(values[0]).strip()
+        if code and code.replace(".", "").isdigit():  # trial balance line: open the statement of that account in a new tab
+            v = state["vars"]; v["account_from"].set(code); v["account_to"].set(code); state["flags"]["detailed"].set(True)
+            self.run_balance_report(state); state["flags"]["detailed"].set(state["statement"])
+
+    def open_transaction(self, entry_number):
+        try: rows = [r for r in self.client.journal() if r["entry_number"] == entry_number]
+        except Exception as exc: return messagebox.showerror("Transaction", str(exc))
+        if not rows: return messagebox.showinfo("Transaction", f"{entry_number} was not found in this fiscal year")
+        first = rows[0]
+        window = tk.Toplevel(self); window.title(f"Transaction {entry_number}"); window.configure(bg=LIGHT); window.geometry("860x380"); window.transient(self)
+        tk.Label(window, text=f"{entry_number}   |   {_date_text(first['entry_date'])}   |   {first.get('description') or ''}", bg=LIGHT, fg=NAVY, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=8)
+        tree = ttk.Treeview(window, columns=("account", "name", "party", "debit", "credit"), show="headings", height=9)
+        for key, label, width in (("account", "Account", 110), ("name", "Account Name", 260), ("party", "Customer / Supplier", 200), ("debit", "Debit", 110), ("credit", "Credit", 110)):
+            tree.heading(key, text=label); tree.column(key, width=width, anchor="e" if key in ("debit", "credit") else "w")
+        for r in rows: tree.insert("", "end", values=(r["account_code"], r.get("account_name") or "", r.get("party_name") or "", f'{float(r["debit"] or 0):,.2f}', f'{float(r["credit"] or 0):,.2f}'))
+        tree.pack(fill="both", expand=True, padx=10)
+        tk.Label(window, text=f'Total  Debit {sum(float(r["debit"] or 0) for r in rows):,.2f}   Credit {sum(float(r["credit"] or 0) for r in rows):,.2f}  {first["currency"]}', bg=LIGHT, fg=NAVY).pack(anchor="e", padx=10)
+        buttons = tk.Frame(window, bg=LIGHT); buttons.pack(pady=8)
+        source, source_id = first.get("source_type"), first.get("source_id")
+        def open_source():
+            window.destroy()
+            try:
+                if source == "journal_voucher" and not source_id: self.select_main_tab(self.manual_tab); self.open_voucher(first["entry_id"]); return
+                if source in ("invoice", "journal_voucher") and source_id:
+                    invoice = next((r for r in self.client.invoices() if r["id"] == source_id), None)
+                    if invoice and invoice["kind"] == "sale" and hasattr(self, "sales_open_map"):
+                        self.select_main_tab(self.sales_tab); self.load_sales_customer_list()
+                        key = next((k for k, r in self.sales_open_map.items() if r["id"] == source_id), None)
+                        if key: self.sales_open_choice.set(key); self.open_sales_invoice(); return
+                    if invoice and hasattr(self, "purchase_form"):
+                        self.select_main_tab(self.purchases_tab); self.load_purchases(); f = self.purchase_form
+                        key = next((k for k, i in f.get("find_map", {}).items() if i == source_id), None)
+                        if key: f["find"].set(key); self.purchase_found(); return
+                if source == "payment" and hasattr(self, "payment_forms"):
+                    self.select_main_tab(self.transactions_tab); self.load_transactions()
+                    for form in self.payment_forms.values():
+                        if str(source_id) in form.get("rows", {}): form["tree"].selection_set(str(source_id)); self.edit_payment(form); return
+                if source == "expense" and hasattr(self, "expense_form"):
+                    self.select_main_tab(self.purchases_tab); self.load_expenses(); self.expense_form["tree"].selection_set(str(source_id)); self.edit_expense(); return
+                messagebox.showinfo("Transaction", "This transaction has no editing screen (opening, closing or automatic entry)")
+            except Exception as exc: messagebox.showerror("Transaction", str(exc))
+        tk.Button(buttons, text="Open in its screen", command=open_source, bg=GOLD, fg=NAVY, border=0, padx=14, pady=6, font=("Segoe UI", 9, "bold")).pack(side="left", padx=4)
+        tk.Button(buttons, text="Close", command=window.destroy, bg=NAVY, fg="white", border=0, padx=14, pady=6).pack(side="left", padx=4)
 
     def balance_party_search(self, v):
         from desktop import row_matches_search
@@ -509,13 +626,23 @@ class BrainsScreensMixin:
                 except ValueError: raise ValueError(f"{key.replace('_', ' ').title()} must be DD-MM-YYYY")
         return options
 
-    def run_balance_report(self, state):
+    def run_balance_report(self, state, refresh=False):
         try:
             if state["statement"] and not state["vars"]["account_from"].get().strip():
                 raise ValueError("Choose a customer / supplier (or an account range) first")
             options = self.balance_options(state); result = self.client.account_report(options)
         except Exception as exc: return messagebox.showerror("Statement of Account" if state["statement"] else "Trial Balance", str(exc))
-        state["result"] = result; self.show_sections(state["viewer"], result["sections"])
+        if refresh and state.get("viewer") is not None and state["notebook"].select() in state["tabs"]: viewer = state["viewer"]
+        else:
+            v = state["vars"]; party = v.get("party").get() if v.get("party") is not None else ""
+            name = party.split(" | ")[0] if party and v["account_from"].get() == v["account_to"].get() else f'{v["account_from"].get() or "first"} - {v["account_to"].get() or "last"}'
+            frame, viewer = self.new_result_tab(state, ("Statement " if state["statement"] or options.get("detailed") else "TB ") + name)
+            state["tabs"][str(frame)] = (result, viewer)
+        state["result"] = result; state["viewer"] = viewer
+        current = state["notebook"].select()
+        if current: state["tabs"][current] = (result, viewer)
+        self.show_sections(viewer, result["sections"])
+        if getattr(viewer, "_info", None): viewer._info.config(text=f"{result['title']}  |  {result['account_count']} account(s)  |  " + result["meta"][2])
         state["info"].config(text=f"{result['title']}  |  {result['account_count']} account(s)  |  " + "   ".join(result["meta"][1:3]), fg=NAVY)
 
     def export_balance_report(self, state, format_name):
@@ -532,7 +659,7 @@ class BrainsScreensMixin:
 
     def load_trial(self):
         state = getattr(self, "trial_state", None)
-        if state and state.get("result"): self.run_balance_report(state)
+        if state and state.get("result") and state["notebook"].winfo_exists(): self.run_balance_report(state, refresh=True)
 
     def build_statement(self):
         self.statement_state = self.build_balance_panel(self.statement_tab, statement=True)
@@ -551,4 +678,4 @@ class BrainsScreensMixin:
 
     def load_statement(self):
         state = getattr(self, "statement_state", None)
-        if state and state.get("result"): self.run_balance_report(state)
+        if state and state.get("result") and state["notebook"].winfo_exists(): self.run_balance_report(state, refresh=True)

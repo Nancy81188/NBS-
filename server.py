@@ -124,10 +124,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if path == "/api/inventory/documents": return self._json(200,{"items":inventory.list_documents(self.db)})
                 if path.startswith("/api/inventory/documents/"): return self._json(200,inventory.get_document(self.db,int(path.rsplit("/",1)[-1])))
                 if path == "/api/inventory/next-number": return self._json(200,{"number":inventory.next_number(self.db,self._query(parsed,"type"),self._query(parsed,"date"))})
+                if path == "/api/inventory/categories": return self._json(200,inventory.list_categories(self.db))
+                if path == "/api/inventory/count-sheet": return self._json(200,{"items":inventory.count_sheet(self.db,self._query(parsed,"warehouse_id"),self._query(parsed,"date"))})
+                if path == "/api/inventory/counts": return self._json(200,{"items":inventory.list_counts(self.db)})
+                if path.startswith("/api/inventory/counts/"): return self._json(200,inventory.get_count(self.db,int(path.rsplit("/",1)[-1])))
                 if path == "/api/inventory/report":
                     result=inventory.build_report(self.db,self._query(parsed,"report"),json.loads(self._query(parsed,"options","{}") or "{}"))
                     return self._json(200,ledger_reports.json_ready(result))
             except KeyError as exc: return self._json(404,{"error":str(exc).strip("'")})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/parties/") and path.endswith("/open-documents"):
+            try: return self._json(200,{"items":self.db.open_documents(int(path.split("/")[-2]))})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/payments/") and path.endswith("/allocations"):
+            try: return self._json(200,{"items":self.db.payment_allocations(int(path.split("/")[-2]))})
             except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/departments": return self._json(200,{"items":self.db.list_departments()})
         if path == "/api/projects": return self._json(200,{"items":self.db.list_projects()})
@@ -353,6 +363,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if path == "/api/inventory/documents":
                     return self._json(201,inventory.save_document(self.db,body.get("header",{}),body.get("lines",[]),user["id"],body.get("id")))
                 if path == "/api/inventory/stock-variation": return self._json(200,inventory.post_stock_variation(self.db,body.get("year"),user["id"]))
+                if path == "/api/inventory/categories": return self._json(200,inventory.save_category(self.db,body,user["id"]))
+                if path == "/api/inventory/counts": return self._json(201,inventory.save_count(self.db,body.get("header",{}),body.get("lines",[]),user["id"],body.get("id"),bool(body.get("post"))))
+                if path == "/api/inventory/find-or-create": return self._json(200,{"item":inventory.find_or_create_item(self.db,body.get("name"),body.get("unit"),body.get("sku"),user["id"],body.get("supplier_id"))})
+            except KeyError as exc: return self._json(404,{"error":str(exc).strip("'")})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path.startswith("/api/payments/") and path.endswith("/allocations"):
+            try: return self._json(200,{"items":self.db.save_allocations(int(path.split("/")[-2]),body.get("allocations",[]),user["id"])})
             except KeyError as exc: return self._json(404,{"error":str(exc).strip("'")})
             except Exception as exc: return self._json(400,{"error":str(exc)})
         if path in ("/api/departments","/api/projects","/api/budgets"):

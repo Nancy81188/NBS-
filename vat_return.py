@@ -89,6 +89,8 @@ def _documents(db, start, end, currency, include_review):
             "exempt": _money(row.get("non_deductible_subtotal")), "vat": _money(row.get("vat")), "status": row["status"],
             "recoverable": category == "sales" or bool(int(row.get("vat_recoverable") if row.get("vat_recoverable") is not None else 1)),
             "treatment": row.get("vat_treatment") or "standard", "use": row.get("vat_use") or "mixed"})
+        if row.get("doc_subtype") == "credit_note":  # a credit note reduces the supplies and the VAT of the period
+            documents[-1].update(base=-documents[-1]["base"], exempt=-documents[-1]["exempt"], vat=-documents[-1]["vat"])
     for row in expenses:
         try: day = iso_date(row["expense_date"])
         except ValueError: skipped.append(f"EXP-{row['id']}"); continue
@@ -150,7 +152,7 @@ def _classify(doc):
         vat = vat if vat else ((base + exempt) * RATE).quantize(CENT, rounding=ROUND_HALF_UP)
         result["reverse_output"] = vat
     if not doc["recoverable"] or doc["use"] == "exempt": result["blocked"] = vat
-    else: result[doc["category"]] = vat; result["mixed" if doc["use"] == "mixed" else "full"] = vat
+    else: result[doc["category"]] = vat; result["mixed" if doc["use"] == "mixed" else "full"] = vat  # "export" and "taxable" uses are fully deductible
     return result
 
 

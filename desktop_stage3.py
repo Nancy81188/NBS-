@@ -176,12 +176,23 @@ class Stage3Mixin:
         tk.Label(row, text="Amount", bg=LIGHT, font=("Segoe UI", 9, "bold")).pack(side="left"); tk.Entry(row, textvariable=v["amount"], width=14, font=("Segoe UI", 10, "bold")).pack(side="left", padx=4)
         row2 = tk.Frame(box, bg=LIGHT); row2.pack(fill="x", pady=(6, 0))
         tk.Label(row2, text="Method", bg=LIGHT).pack(side="left"); ttk.Combobox(row2, textvariable=v["method"], values=METHODS, state="readonly", width=13).pack(side="left", padx=(4, 10))
-        tk.Label(row2, text="Cash / Bank Account", bg=LIGHT).pack(side="left"); self.account_search_box(row2, v["cash_account"], 14).pack(side="left", padx=(4, 10))
+        tk.Label(row2, text="Cash / Bank Account", bg=LIGHT).pack(side="left")
+        form["cash_box"] = ttk.Combobox(row2, textvariable=v["cash_account"], width=26, state="readonly"); form["cash_box"].pack(side="left", padx=(4, 10))
         tk.Label(row2, text="Ref. / Cheque", bg=LIGHT).pack(side="left"); tk.Entry(row2, textvariable=v["reference"], width=14).pack(side="left", padx=(4, 10))
         tk.Label(row2, text="Description", bg=LIGHT).pack(side="left"); tk.Entry(row2, textvariable=v["description"], width=22).pack(side="left", padx=4)
         row3 = tk.Frame(box, bg=LIGHT); row3.pack(fill="x", pady=(6, 0))
         self.dimension_selectors(row3, form["department"], form["project"])
         form["balance"] = tk.Label(row3, text="", bg=LIGHT, fg=NAVY, font=("Segoe UI", 9, "bold")); form["balance"].pack(side="left", padx=10)
+        alloc = tk.LabelFrame(page, text="Allocation - which invoices this " + ("receipt settles" if kind == "customer_receipt" else "payment settles"), bg=LIGHT, padx=6, pady=2)
+        alloc.pack(fill="x", padx=8, pady=(0, 4))
+        bar = tk.Frame(alloc, bg=LIGHT); bar.pack(fill="x")
+        self.action_button(bar, "Auto Allocate (oldest first)", lambda: self.auto_allocate(form)).pack(side="left", padx=(0, 4))
+        self.action_button(bar, "Clear Allocation", lambda: self.clear_allocation(form)).pack(side="left", padx=4)
+        form["alloc_info"] = tk.Label(bar, text="Choose the customer / supplier to see the open invoices", bg=LIGHT, fg=MUTED); form["alloc_info"].pack(side="left", padx=8)
+        from desktop_brains import EditableSheet
+        form["alloc_sheet"] = EditableSheet(self, alloc, [("line", "#", 35, "center"), ("number", "Document", 140, "w"), ("date", "Date", 90, "center"), ("type", "Type", 90, "w"),
+            ("currency", "Cur.", 50, "center"), ("total", "Total", 110, "e"), ("open", "Open", 110, "e"), ("allocate", "Allocate", 110, "e")], ["allocate"],
+            lambda iid, key, text: self.allocation_changed(form, iid, text), height=4)
         buttons = tk.Frame(box, bg=LIGHT); buttons.pack(fill="x", pady=(6, 0))
         self.action_button(buttons, "New", lambda: self.new_payment(form)).pack(side="left", padx=(0, 3))
         tk.Button(buttons, text="Save", command=lambda: self.save_payment(form), bg=GOLD, fg=NAVY, border=0, padx=18, pady=7, font=("Segoe UI", 9, "bold")).pack(side="left", padx=3)
@@ -196,9 +207,53 @@ class Stage3Mixin:
         typed = form["vars"]["party"].get().strip().casefold(); names = list(form.get("party_map", {}))
         form["party_box"]["values"] = [n for n in names if typed in n.casefold()] if typed else names
 
+    def load_open_documents(self, form, party, existing=None):
+        sheet = form["alloc_sheet"]; sheet.clear(); existing = {a["invoice_id"]: a["amount"] for a in (existing or [])}
+        try: documents = self.client.open_documents(party["id"])
+        except Exception: documents = []
+        known = {d["id"] for d in documents}
+        for invoice_id, amount in existing.items():
+            if invoice_id not in known:
+                row = next((r for r in self.client.invoices() if r["id"] == invoice_id), None)
+                if row: documents.append({"id": row["id"], "invoice_number": row["invoice_number"], "invoice_date": row["invoice_date"], "kind": row["kind"], "doc_subtype": row.get("doc_subtype"),
+                                          "currency": row["currency"], "total": float(row["total"] or 0), "open_amount": 0.0})
+        for d in documents:
+            open_amount = float(d["open_amount"]) + float(existing.get(d["id"], 0))
+            row = {"invoice_id": d["id"], "number": d["invoice_number"], "date": _dd(d["invoice_date"]), "type": {"credit_note": "Credit note", "debit_note": "Debit note"}.get(d.get("doc_subtype"), "Sale" if d["kind"] == "sale" else "Purchase"),
+                   "currency": d["currency"], "total": d["total"], "open": open_amount, "allocate": float(existing.get(d["id"], 0))}
+            row["_display"] = {"total": f'{d["total"]:,.2f}', "open": f"{open_amount:,.2f}", "allocate": f'{row["allocate"]:,.2f}' if row["allocate"] else ""}
+            sheet.insert(row)
+        self.update_allocation_info(form)
+
+    def allocation_changed(self, form, iid, text):
+        row = form["alloc_sheet"].rows[iid]; value = _num(text, 0.0)
+        if value is None or value < 0: messagebox.showwarning("Allocation", "Enter a positive amount"); return False
+        if value > abs(row["open"]) + 0.005: messagebox.showwarning("Allocation", f"{row['number']} is open for {row['open']:,.2f} only"); return False
+        row["allocate"] = value; row["_display"]["allocate"] = f"{value:,.2f}" if value else ""; self.update_allocation_info(form)
+
+    def update_allocation_info(self, form):
+        rows = form["alloc_sheet"].ordered(); allocated = sum(r["allocate"] for r in rows); amount = _num(form["vars"]["amount"].get()) or 0
+        form["alloc_info"].config(text=f"{len(rows)} open document(s)   Allocated: {allocated:,.2f} of {amount:,.2f}   Unallocated (on account): {amount - allocated:,.2f}",
+                                  fg="#8B1E1E" if allocated > amount + 0.005 else NAVY)
+
+    def auto_allocate(self, form):
+        remaining = _num(form["vars"]["amount"].get()) or 0
+        if remaining <= 0: return messagebox.showwarning("Allocation", "Enter the amount first")
+        for iid in form["alloc_sheet"].tree.get_children():
+            row = form["alloc_sheet"].rows[iid]
+            if row["currency"] != form["vars"]["currency"].get() or row["open"] <= 0: row["allocate"] = 0
+            else: row["allocate"] = round(min(remaining, row["open"]), 2); remaining -= row["allocate"]
+            row["_display"]["allocate"] = f'{row["allocate"]:,.2f}' if row["allocate"] else ""; form["alloc_sheet"].refresh(iid)
+        self.update_allocation_info(form)
+
+    def clear_allocation(self, form):
+        for iid, row in form["alloc_sheet"].rows.items(): row["allocate"] = 0; row["_display"]["allocate"] = ""; form["alloc_sheet"].refresh(iid)
+        self.update_allocation_info(form)
+
     def payment_party_chosen(self, form):
         party = form.get("party_map", {}).get(form["vars"]["party"].get())
         if not party: return
+        self.load_open_documents(form, party)
         if party.get("currency"): form["vars"]["currency"].set(party["currency"])
         account = party.get("account_number")
         if not account: form["balance"].config(text=""); return
@@ -215,6 +270,7 @@ class Stage3Mixin:
     def new_payment(self, form):
         form["id"] = None; v = form["vars"]
         for key in ("party", "amount", "reference", "description"): v[key].set("")
+        if "alloc_sheet" in form: form["alloc_sheet"].clear(); form["alloc_info"].config(text="Choose the customer / supplier to see the open invoices")
         v["date"].set(datetime.now().strftime("%d-%m-%Y")); v["method"].set("Cash"); form["department"].set("(none)"); form["project"].set("(none)"); form["balance"].config(text="")
         try: v["number"].set(self.client.next_document_number(form["kind"], v["date"].get()))
         except Exception: v["number"].set("")
@@ -232,9 +288,11 @@ class Stage3Mixin:
     def save_payment(self, form):
         try: payload = self.payment_payload(form)
         except ValueError as exc: return messagebox.showwarning("Payment & Receipt", str(exc) if "time data" not in str(exc) else "Date must be DD-MM-YYYY")
+        allocations = [{"invoice_id": r["invoice_id"], "amount": r["allocate"]} for r in form["alloc_sheet"].ordered() if r["allocate"]]
+        if sum(a["amount"] for a in allocations) > payload["amount"] + 0.005: return messagebox.showwarning("Payment & Receipt", "The allocation is more than the amount")
         try:
-            if form["id"]: self.client.update_payment(form["id"], payload)
-            else: self.client.add_payment(payload)
+            payment_id = self.client.update_payment(form["id"], payload) if form["id"] else self.client.add_payment(payload)["payment_id"]
+            if allocations: self.client.save_allocations(payment_id, allocations)
         except Exception as exc: return messagebox.showerror("Payment & Receipt", str(exc))
         number = form["vars"]["number"].get()
         messagebox.showinfo("Payment & Receipt", f"{'Receipt' if form['kind'] == 'customer_receipt' else 'Payment'} {number} saved")
@@ -254,6 +312,11 @@ class Stage3Mixin:
         form["department"].set(next((f'{d["code"]} - {d["name"]}' for d in lists["departments"] if d["code"] == row.get("department")), "(none)"))
         form["project"].set(next((f'{p["code"]} - {p["name"]}' for p in lists["projects"] if p["code"] == row.get("project")), "(none)"))
         form["balance"].config(text=f"Editing {row.get('payment_number') or ''}")
+        party = next((p for p in form.get("party_map", {}).values() if p["id"] == row["party_id"]), None)
+        if party:
+            try: existing = self.client.payment_allocations(row["id"])
+            except Exception: existing = []
+            self.load_open_documents(form, party, existing)
 
     def delete_payment(self, form):
         if not form["id"]: return messagebox.showwarning("Payment & Receipt", "Double-click a saved line to open it first")
@@ -267,8 +330,14 @@ class Stage3Mixin:
             try: payments = self.client.payments(); parties = self.client.parties()
             except Exception as exc: return messagebox.showerror("Payment & Receipt", str(exc))
             for kind, form in self.payment_forms.items():
-                wanted = ("customer", "both") if kind == "customer_receipt" else ("supplier", "both")
-                form["party_map"] = {f'{p["name"]} | {p.get("account_number") or ""}': p for p in parties if p["kind"] in wanted}
+                # clients and suppliers are both available in receipts and payments (refunds, advances, settlements)
+                form["party_map"] = {f'{p["name"]} | {p.get("account_number") or ""} | {p["kind"]}': p for p in parties}
+                if not getattr(self, "_cash_accounts", None):
+                    try: self._cash_accounts = [f'{a["code"]} - {a["name_en"]}' for a in self.client.accounts() if str(a["code"]).startswith(("511", "512", "519", "53"))]
+                    except Exception: self._cash_accounts = ["531 - Cash"]
+                form["cash_box"]["values"] = self._cash_accounts
+                if not form["vars"]["cash_account"].get() or form["vars"]["cash_account"].get() == "531":
+                    form["vars"]["cash_account"].set(next((a for a in self._cash_accounts if a.startswith("531")), self._cash_accounts[0] if self._cash_accounts else "531"))
                 form["party_box"]["values"] = list(form["party_map"])
                 rows = [r for r in payments if r["kind"] == kind]; form["rows"] = {str(r["id"]): r for r in rows}
                 form["tree"].delete(*form["tree"].get_children())
@@ -282,15 +351,15 @@ class Stage3Mixin:
     # ================================================================ Purchases & Expenses
     def build_purchases_expenses(self):
         nested = ttk.Notebook(self.purchases_tab); nested.pack(fill="both", expand=True, padx=8, pady=8)
-        purchases = tk.Frame(nested, bg=LIGHT); expenses = tk.Frame(nested, bg=LIGHT)
-        nested.add(purchases, text="Purchases"); nested.add(expenses, text="Expenses")
+        purchases_outer, purchases = self.scrollable_page(nested); expenses = tk.Frame(nested, bg=LIGHT)
+        nested.add(purchases_outer, text="Purchases"); nested.add(expenses, text="Expenses")
         self.build_purchases_page(purchases); self.build_expenses_page(expenses)
         self.load_purchases(); self.load_expenses()
 
     # ---- purchases
     def build_purchases_page(self, page):
         f = {"id": None, "pdf": None, "vars": {k: tk.StringVar() for k in ("supplier", "number", "date", "due", "currency", "type", "taxable", "exempt", "rate", "vat", "account", "vat_account")}}
-        v = f["vars"]; v["date"].set(datetime.now().strftime("%d-%m-%Y")); v["currency"].set("USD"); v["type"].set("Purchases"); v["rate"].set("11"); v["account"].set("601100000"); v["vat_account"].set("442660000")
+        v = f["vars"]; v["date"].set(datetime.now().strftime("%d-%m-%Y")); v["currency"].set("USD"); v["type"].set("Purchases"); v["rate"].set("11"); v["account"].set("601100000"); v["vat_account"].set("44210")
         f["department"] = tk.StringVar(); f["project"] = tk.StringVar(); f["vat_typed"] = False; self.purchase_form = f
         f["use"] = tk.StringVar(value="Mixed (partial deduction)"); f["reverse"] = tk.BooleanVar(value=False)
         box = tk.LabelFrame(page, text="Purchase Invoice", bg=LIGHT, padx=8, pady=5); box.pack(fill="x", padx=8, pady=(6, 3))
@@ -314,6 +383,24 @@ class Stage3Mixin:
         self.dimension_selectors(r3, f["department"], f["project"])
         tk.Label(r3, text="VAT use", bg=LIGHT).pack(side="left"); ttk.Combobox(r3, textvariable=f["use"], values=list(PURCHASE_USES), state="readonly", width=23).pack(side="left", padx=(4, 6))
         tk.Checkbutton(r3, text="Reverse charge", variable=f["reverse"], bg=LIGHT).pack(side="left")
+        find = tk.Frame(page, bg=LIGHT); find.pack(fill="x", padx=8, pady=(0, 2), before=box); f["find"] = tk.StringVar()
+        tk.Label(find, text="Find purchase (No., supplier, date)", bg=LIGHT, font=("Segoe UI", 9, "bold")).pack(side="left")
+        f["find_box"] = ttk.Combobox(find, textvariable=f["find"], width=48); f["find_box"].pack(side="left", padx=6)
+        f["find_box"].bind("<<ComboboxSelected>>", lambda _e: self.purchase_found()); f["find_box"].bind("<KeyRelease>", lambda _e: self.filter_found_purchases())
+        self.action_button(find, "Import Excel", self.import_purchases_excel).pack(side="left", padx=(12, 3))
+        self.action_button(find, "Excel Template", lambda: self.save_invoice_template("purchases")).pack(side="left", padx=3)
+        items = tk.LabelFrame(page, text="Items received into stock (optional) - F2 or type the item code or name; a new item is created automatically", bg=LIGHT, padx=6, pady=2)
+        items.pack(fill="x", padx=8, pady=2, after=box)
+        wh = tk.Frame(items, bg=LIGHT); wh.pack(fill="x"); f["warehouse"] = tk.StringVar()
+        tk.Label(wh, text="Warehouse", bg=LIGHT).pack(side="left"); f["warehouse_box"] = ttk.Combobox(wh, textvariable=f["warehouse"], state="readonly", width=20); f["warehouse_box"].pack(side="left", padx=4)
+        self.action_button(wh, "Add Item Line", lambda: self.purchase_item_line()).pack(side="left", padx=6)
+        tk.Button(wh, text="Delete Line", command=lambda: (f["items_sheet"].delete_selected(), self.purchase_items_changed()), bg="#8B1E1E", fg="white", border=0, padx=10, pady=5).pack(side="left", padx=2)
+        from desktop_brains import EditableSheet
+        f["items_sheet"] = EditableSheet(self, items, [("line", "#", 35, "center"), ("item_code", "Item Code", 100, "w"), ("name", "Item Name", 240, "w"), ("quantity", "Qty", 70, "e"),
+            ("unit", "Unit", 60, "center"), ("unit_cost", "Unit Cost", 95, "e"), ("discount_percent", "Disc. %", 60, "e"), ("total", "Total", 105, "e")],
+            ["item_code", "name", "quantity", "unit", "unit_cost", "discount_percent"], self.purchase_item_changed, height=3)
+        f["items_sheet"].tree.bind("<F2>", lambda _e: self.purchase_item_lookup())
+        f["items_sheet"].tree.master.pack_configure(expand=False, fill="x")  # leave room for the cost on purchase below
         r4 = tk.Frame(box, bg=LIGHT); r4.pack(fill="x", pady=(5, 0))
         f["pdf_label"] = tk.Label(r4, text="No PDF", bg=LIGHT, fg=MUTED)
         self.action_button(r4, "New", self.new_purchase).pack(side="left", padx=(0, 3))
@@ -336,9 +423,93 @@ class Stage3Mixin:
         self.action_button(c2, "Import Customs Excel", self.import_customs_excel).pack(side="left", padx=3)
         self.action_button(c2, "Attach Customs PDF", self.attach_customs_pdf).pack(side="left", padx=3)
         f["lc_label"] = tk.Label(c2, text="", bg=LIGHT, fg=NAVY); f["lc_label"].pack(side="left", padx=8)
-        f["tree"] = self.table(page, [("number", "Invoice No.", 120), ("date", "Date", 88), ("supplier", "Supplier", 190), ("type", "Type", 75), ("currency", "Cur.", 50),
-            ("taxable", "Taxable", 100), ("exempt", "Exempt", 90), ("vat", "VAT", 85), ("total", "Total", 105), ("landed", "Cost on Purchase", 115), ("docs", "Docs", 45), ("dims", "Dep. / Project", 110)])
-        f["tree"].bind("<Double-1>", lambda _e: self.edit_purchase()); f["tree"].bind("<<TreeviewSelect>>", lambda _e: self.purchase_selected())
+        f["tree"] = ttk.Treeview(page, columns=[f"c{i}" for i in range(12)])  # kept hidden: the Find box replaces the list
+        f["tree"].bind("<<TreeviewSelect>>", lambda _e: self.purchase_selected())
+
+    def purchase_item_line(self, row=None):
+        f = self.purchase_form; row = row or {"item_code": "", "name": "", "quantity": 1, "unit": "", "unit_cost": 0, "discount_percent": 0}
+        self.purchase_item_total(row); iid = f["items_sheet"].insert(row); f["items_sheet"].tree.selection_set(iid); f["items_sheet"].tree.focus(iid); return iid
+
+    def purchase_item_total(self, row):
+        qty = _num(row.get("quantity")) or 0; cost = _num(row.get("unit_cost")) or 0; percent = _num(row.get("discount_percent")) or 0
+        row["total"] = round(qty * cost * (1 - percent / 100), 2)
+        row["_display"] = {"quantity": f"{qty:g}", "unit_cost": f"{cost:,.4f}", "discount_percent": f"{percent:g}" if percent else "", "total": f'{row["total"]:,.2f}'}
+
+    def purchase_item_changed(self, iid, key, text):
+        row = self.purchase_form["items_sheet"].rows[iid]
+        if key in ("item_code", "name"):
+            item = self.item_by_code(text) if key == "item_code" else next((i for i in getattr(self, "inventory_rows", []) if i["name"].casefold() == text.strip().casefold()), None)
+            if item: row.update(item_code=item["sku"], name=item["name"], unit=item["unit"], unit_cost=row.get("unit_cost") or item["average_cost"])
+            elif key == "item_code" and text: messagebox.showwarning("Purchases", f"Item {text} was not found. Type the item name instead: a new item is created on saving."); return False
+            else: row[key] = text.strip()
+        elif key == "unit": row["unit"] = text.strip()
+        else:
+            value = _num(text, None)
+            if value is None or value < 0: messagebox.showwarning("Purchases", "Enter a positive number"); return False
+            row[key] = value
+        self.purchase_item_total(row); self.purchase_items_changed()
+
+    def purchase_items_changed(self):
+        f = self.purchase_form; rows = [r for r in f["items_sheet"].ordered() if (r.get("item_code") or r.get("name")) and _num(r.get("quantity"))]
+        if rows: f["vars"]["taxable"].set(f'{sum(r["total"] for r in rows):.2f}'); self.purchase_amounts_changed("taxable")
+
+    def purchase_item_lookup(self):
+        iid, row = self.purchase_form["items_sheet"].selected()
+        if not row: return
+        window = tk.Toplevel(self); window.title("Items - F2"); window.geometry("640x420"); window.configure(bg=LIGHT); window.transient(self); window.grab_set()
+        search = tk.StringVar(); entry = tk.Entry(window, textvariable=search, width=40); entry.pack(padx=10, pady=8); entry.focus_set()
+        tree = ttk.Treeview(window, columns=("sku", "name", "unit", "cost"), show="headings"); tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        for key, label, width in (("sku", "Code", 100), ("name", "Item", 300), ("unit", "Unit", 70), ("cost", "Average Cost", 100)): tree.heading(key, text=label); tree.column(key, width=width)
+        def fill(*_a):
+            tree.delete(*tree.get_children()); text = search.get().casefold()
+            for i in getattr(self, "inventory_rows", []):
+                if i["active"] and (not text or text in f'{i["sku"]} {i["name"]} {i.get("category") or ""}'.casefold()): tree.insert("", "end", values=(i["sku"], i["name"], i["unit"], f'{i["average_cost"]:,.4f}'))
+        def choose(_e=None):
+            if tree.selection(): self.purchase_item_changed(iid, "item_code", tree.item(tree.selection()[0], "values")[0]); self.purchase_form["items_sheet"].refresh(iid); window.destroy()
+        search.trace_add("write", fill); tree.bind("<Double-1>", choose); tree.bind("<Return>", choose); fill()
+
+    def filter_found_purchases(self):
+        f = self.purchase_form; typed = f["find"].get().strip(); choices = list(f.get("find_map", {}))
+        if typed.isdigit(): f["find_box"]["values"] = [c for c in choices if typed in c.split(" | ")[0]]
+        else: f["find_box"]["values"] = [c for c in choices if typed.casefold() in c.casefold()] if typed else choices
+
+    def purchase_found(self):
+        f = self.purchase_form; invoice_id = f.get("find_map", {}).get(f["find"].get())
+        if not invoice_id: return
+        f["tree"].selection_set(str(invoice_id)); self.edit_purchase(); self.purchase_selected()
+        f["items_sheet"].clear()
+        try: lines = self.client.invoice_items(invoice_id)
+        except Exception: lines = []
+        for line in lines:
+            if line.get("item_code"):
+                row = {"item_code": line["item_code"], "name": line["description"], "quantity": float(line["quantity"]), "unit": line.get("unit") or "", "unit_cost": float(line["unit_price"]),
+                       "discount_percent": float(line.get("discount_percent") or 0)}
+                self.purchase_item_line(row)
+
+    def import_purchases_excel(self):
+        from importer import read_invoice_lines
+        path = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xlsm")])
+        if not path: return
+        try: invoices = read_invoice_lines(path, "purchases")
+        except Exception as exc: return messagebox.showerror("Import Purchases", f"The Excel file could not be read: {exc}")
+        if not messagebox.askyesno("Import Purchases", f"Import {len(invoices)} purchase invoice(s)? Items that do not exist are created automatically."): return
+        done = 0; created = 0; errors = []
+        for invoice in invoices:
+            try:
+                lines = []
+                for line in invoice["lines"]:
+                    before = len(getattr(self, "inventory_rows", []))
+                    item = self.client.find_or_create_item(line["description"], line.get("unit") or "unit", line.get("item_code") or None)
+                    if not self.item_by_code(item["sku"]): created += 1
+                    cost = line["unit_price"] * (1 - (line.get("discount_percent") or 0) / 100)
+                    lines.append({"item_code": item["sku"], "description": item["name"], "quantity": line["quantity"], "unit": line.get("unit") or item.get("unit"), "unit_price": round(cost, 4),
+                                  "vat_rate": line.get("vat_rate", 11), "discount_percent": line.get("discount_percent") or 0, "warehouse": invoice.get("warehouse") or "MAIN"})
+                self.client.create_manual_invoice({"invoice_number": invoice["invoice_number"], "invoice_date": invoice["invoice_date"], "party_name": invoice["party_name"], "kind": "purchases",
+                                                   "currency": invoice["currency"], "status": "posted", "source_file": Path(path).name}, lines); done += 1
+                self.load_inventory()
+            except Exception as exc: errors.append(f"{invoice['invoice_number']}: {exc}")
+        (messagebox.showwarning if errors else messagebox.showinfo)("Import Purchases", f"{done} purchase(s) imported and received into stock; {created} new item(s) created." + ("\n" + "\n".join(errors[:12]) if errors else ""))
+        self.load_purchases(); self.load_invoices(); self.load_journal(); self.load_trial()
 
     def filter_suppliers(self):
         f = self.purchase_form; typed = f["vars"]["supplier"].get().strip().casefold(); names = list(f.get("supplier_map", {}))
@@ -363,6 +534,7 @@ class Stage3Mixin:
         v["date"].set(datetime.now().strftime("%d-%m-%Y")); v["rate"].set("11"); v["type"].set("Purchases"); f["department"].set("(none)"); f["project"].set("(none)")
         f["use"].set("Mixed (partial deduction)"); f["reverse"].set(False)
         f["pdf_label"].config(text="No PDF", fg=MUTED); f["total"].config(text="Total: 0.00"); f["tree"].selection_remove(*f["tree"].selection())
+        f["items_sheet"].clear(); f["find"].set("")
 
     def choose_purchase_pdf(self):
         path = filedialog.askopenfilename(filetypes=[("PDF invoice", "*.pdf"), ("Images", "*.png *.jpg *.jpeg")])
@@ -381,7 +553,7 @@ class Stage3Mixin:
         else: f["pdf_label"].config(text=Path(path).name, fg=NAVY)
 
     def purchase_payload(self):
-        f = self.purchase_form; v = f["vars"]
+        f = self.purchase_form; v = f["vars"]; self.purchase_items_changed()
         if not v["supplier"].get().strip(): raise ValueError("Choose or type the supplier")
         taxable = _num(v["taxable"].get()); exempt = _num(v["exempt"].get()); vat = _num(v["vat"].get()); rate = _num(v["rate"].get())
         if None in (taxable, exempt, vat, rate) or min(taxable, exempt, vat) < 0: raise ValueError("Amounts must be positive numbers")
@@ -393,6 +565,18 @@ class Stage3Mixin:
                    "department": self.dimension_code(f["department"].get()), "project": self.dimension_code(f["project"].get()),
                    "vat_use": PURCHASE_USES.get(f["use"].get(), "mixed"), "vat_treatment": "reverse_charge" if f["reverse"].get() else "standard"}
         if party and party.get("account_number"): invoice["supplier_account"] = party["account_number"]
+        stock = [r for r in f["items_sheet"].ordered() if (r.get("item_code") or r.get("name")) and _num(r.get("quantity"))]
+        if stock:
+            lines = []; warehouse = (f["warehouse"].get() or "MAIN").split(" - ", 1)[0]
+            for r in stock:
+                code = r.get("item_code")
+                if not code:
+                    item = self.client.find_or_create_item(r["name"], r.get("unit") or "unit", None, party["id"] if party else None); code = item["sku"]
+                cost = (_num(r["unit_cost"]) or 0) * (1 - (_num(r.get("discount_percent")) or 0) / 100)
+                lines.append({"item_code": code, "description": r.get("name") or code, "quantity": _num(r["quantity"]), "unit": r.get("unit") or "", "unit_price": round(cost, 4),
+                              "discount_percent": _num(r.get("discount_percent")) or 0, "vat_rate": rate, "warehouse": warehouse})
+            if exempt: lines.append({"description": "Exempt part", "quantity": 1, "unit_price": exempt, "deductible_subtotal": 0, "non_deductible_subtotal": exempt, "vat_rate": 0, "vat": 0})
+            return invoice, lines
         line = {"description": f"Supplier invoice {invoice['invoice_number']}".strip(), "quantity": 1, "unit_price": taxable, "deductible_subtotal": taxable,
                 "non_deductible_subtotal": exempt, "vat_rate": rate, "vat": vat}
         return invoice, [line]
@@ -430,6 +614,11 @@ class Stage3Mixin:
         for r in customs:
             key = (r.get("description") or "").split("Landed cost of ", 1)[-1].split(" (", 1)[0]
             landed[key] = landed.get(key, 0) + float(r.get("total") or 0)
+        f["find_map"] = {f'{r["invoice_number"]} | {_dd(r["invoice_date"])} | {r.get("party_name") or ""} | {float(r.get("total") or 0):,.2f} {r["currency"]}': r["id"] for r in f["rows"].values()}
+        f["find_box"]["values"] = list(f["find_map"])
+        try: f["warehouse_box"]["values"] = [f'{w["code"]} - {w["name"]}' for w in self.client.warehouses() if w["active"]]
+        except Exception: pass
+        if not f["warehouse"].get() and f["warehouse_box"]["values"]: f["warehouse"].set(f["warehouse_box"]["values"][0])
         f["tree"].delete(*f["tree"].get_children())
         for r in f["rows"].values():
             f["tree"].insert("", "end", iid=str(r["id"]), values=(r["invoice_number"], _dd(r["invoice_date"]), r.get("party_name") or "", (r.get("entry_type") or "").title(), r["currency"],
@@ -537,7 +726,7 @@ class Stage3Mixin:
         f = {"id": None, "pdf": None, "vars": {k: tk.StringVar() for k in ("date", "description", "category", "currency", "with_vat", "without_vat", "vat", "account", "no_vat_account",
                                                                           "vat_account", "payment_account", "reference")}}
         v = f["vars"]; v["date"].set(datetime.now().strftime("%d-%m-%Y")); v["currency"].set("USD"); v["category"].set("General")
-        v["account"].set("601100000"); v["no_vat_account"].set("601100001"); v["vat_account"].set("442660000"); v["payment_account"].set("531")
+        v["account"].set("601100000"); v["no_vat_account"].set("601100001"); v["vat_account"].set("44216"); v["payment_account"].set("531")
         f["department"] = tk.StringVar(); f["project"] = tk.StringVar(); f["non_deductible"] = tk.BooleanVar(value=False); f["vat_typed"] = False; self.expense_form = f
         f["use"] = tk.StringVar(value="Mixed (partial deduction)")
         box = tk.LabelFrame(page, text="Expense", bg=LIGHT, padx=8, pady=5); box.pack(fill="x", padx=8, pady=6)
@@ -555,8 +744,11 @@ class Stage3Mixin:
         f["total"] = tk.Label(r2, text="Total: 0.00", bg=LIGHT, fg=NAVY, font=("Segoe UI", 10, "bold")); f["total"].pack(side="left", padx=6)
         tk.Checkbutton(r2, text="VAT not deductible", variable=f["non_deductible"], bg=LIGHT).pack(side="left", padx=8)
         r3 = tk.Frame(box, bg=LIGHT); r3.pack(fill="x", pady=(5, 0))
-        for label, key in (("Expense A/C", "account"), ("No-VAT A/C", "no_vat_account"), ("VAT A/C", "vat_account"), ("Paid from", "payment_account")):
-            tk.Label(r3, text=label, bg=LIGHT).pack(side="left"); self.account_search_box(r3, v[key], 11).pack(side="left", padx=(4, 8))
+        for label, key in (("Expense A/C (626-69)", "account"), ("No-VAT A/C", "no_vat_account"), ("VAT A/C", "vat_account"), ("Paid from", "payment_account")):
+            tk.Label(r3, text=label, bg=LIGHT).pack(side="left")
+            if key in ("account", "no_vat_account", "payment_account"):
+                box_widget = ttk.Combobox(r3, textvariable=v[key], width=24 if key == "account" else 14); box_widget.pack(side="left", padx=(4, 8)); f[f"{key}_box"] = box_widget
+            else: self.account_search_box(r3, v[key], 9).pack(side="left", padx=(4, 8))
         r4 = tk.Frame(box, bg=LIGHT); r4.pack(fill="x", pady=(5, 0))
         self.dimension_selectors(r4, f["department"], f["project"])
         tk.Label(r4, text="VAT used for", bg=LIGHT).pack(side="left"); ttk.Combobox(r4, textvariable=f["use"], values=list(PURCHASE_USES), state="readonly", width=24).pack(side="left", padx=4)
@@ -568,9 +760,12 @@ class Stage3Mixin:
         self.action_button(r5, "Upload PDF", self.choose_expense_pdf).pack(side="left", padx=3)
         self.action_button(r5, "Attachments", self.expense_attachments_window).pack(side="left", padx=3)
         self.action_button(r5, "Import Expenses Excel", self.import_expenses_excel).pack(side="left", padx=3)
-        f["tree"] = self.table(page, [("number", "Number", 120), ("date", "Date", 88), ("description", "Description", 210), ("category", "Category", 100), ("currency", "Cur.", 50),
-            ("with_vat", "With VAT", 95), ("without_vat", "Without VAT", 95), ("vat", "VAT", 80), ("total", "Total", 100), ("deductible", "VAT Ded.", 65), ("docs", "Docs", 45), ("dims", "Dep. / Project", 110)])
-        f["tree"].bind("<Double-1>", lambda _e: self.edit_expense())
+        f["tree"] = ttk.Treeview(page, columns=[f"c{i}" for i in range(12)])  # kept hidden: the Find box replaces the list
+        find = tk.Frame(page, bg=LIGHT); find.pack(fill="x", padx=8, pady=(0, 4), before=box); f["find"] = tk.StringVar()
+        tk.Label(find, text="Find expense (No., description, date)", bg=LIGHT, font=("Segoe UI", 9, "bold")).pack(side="left")
+        f["find_box"] = ttk.Combobox(find, textvariable=f["find"], width=50); f["find_box"].pack(side="left", padx=6)
+        f["find_box"].bind("<<ComboboxSelected>>", lambda _e: self.expense_found())
+        f["find_box"].bind("<KeyRelease>", lambda _e: f["find_box"].configure(values=[c for c in f.get("find_map", {}) if f["find"].get().strip().casefold() in c.casefold()]))
 
     def expense_amounts_changed(self, key):
         f = self.expense_form; v = f["vars"]
@@ -633,10 +828,23 @@ class Stage3Mixin:
         except Exception: rows = []
         lists = self.dimension_lists(); departments = {d["id"]: d["code"] for d in lists["departments"]}; projects = {p["id"]: p["code"] for p in lists["projects"]}
         f["rows"] = {str(r["id"]): r for r in rows}; f["tree"].delete(*f["tree"].get_children())
+        f["find_map"] = {f'{r.get("expense_number") or r["id"]} | {_dd(r["expense_date"])} | {r["description"]} | {r["total"]:,.2f} {r["currency"]}': r["id"] for r in rows}; f["find_box"]["values"] = list(f["find_map"])
+        if not getattr(self, "_expense_accounts", None):
+            try:
+                accounts = self.client.accounts()
+                def in_range(code): code = str(code); return code[:3] in ("626", "627", "628", "629") or code[:2] in ("63", "64", "65", "66", "67", "68", "69")
+                self._expense_accounts = [f'{a["code"]} - {a["name_en"]}' for a in accounts if in_range(a["code"]) and str(a["code"]).isdigit()]
+                self._cash_accounts = self._cash_accounts if getattr(self, "_cash_accounts", None) else [f'{a["code"]} - {a["name_en"]}' for a in accounts if str(a["code"]).startswith(("511", "512", "519", "53"))]
+            except Exception: self._expense_accounts = []
+        f["account_box"]["values"] = self._expense_accounts; f["no_vat_account_box"]["values"] = self._expense_accounts; f["payment_account_box"]["values"] = getattr(self, "_cash_accounts", [])
         for r in rows:
             f["tree"].insert("", "end", iid=str(r["id"]), values=(r.get("expense_number") or f"EXP-{r['id']}", _dd(r["expense_date"]), r["description"], r.get("category") or "", r["currency"],
                 f'{r.get("with_vat_subtotal") or 0:,.2f}', f'{r.get("without_vat_subtotal") or 0:,.2f}', f'{r["vat"]:,.2f}', f'{r["total"]:,.2f}',
                 "Yes" if r.get("vat_recoverable", 1) else "NO", r.get("attachment_count") or "", " / ".join(x for x in (departments.get(r.get("department_id")), projects.get(r.get("project_id"))) if x)))
+
+    def expense_found(self):
+        f = self.expense_form; expense_id = f.get("find_map", {}).get(f["find"].get())
+        if expense_id: f["tree"].selection_set(str(expense_id)); self.edit_expense()
 
     def edit_expense(self):
         f = self.expense_form; selected = f["tree"].selection()

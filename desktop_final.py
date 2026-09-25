@@ -174,7 +174,9 @@ class FinalFeaturesMixin:
             text = section["heading"]; parts = []
             for index in range(20):
                 if not text: break
-                size = max(4, int(int(tree.column(f"c{index}", "width")) / 8.6)); parts.append(text[:size]); text = text[size:]
+                size = max(4, int(int(tree.column(f"c{index}", "width")) / 8.6))
+                if len(text) > size and " " in text[:size]: size = text[:size].rindex(" ") + 1  # break between words
+                parts.append(text[:size]); text = text[size:]
             tree.insert("", "end", values=parts, tags=("section",))
             tree.insert("", "end", values=section["headers"], tags=("header",))
             totals = set(section.get("total_rows") or [])

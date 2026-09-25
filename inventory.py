@@ -35,6 +35,14 @@ def migrate(db):
     movement_columns = {row["name"] for row in db.execute("PRAGMA table_info(stock_movements)")}
     for column, definition in (("warehouse_id", "INTEGER"), ("document_id", "INTEGER"), ("movement_type", "TEXT"), ("sales_price", "TEXT"), ("line_no", "INTEGER")):
         if column not in movement_columns: db.execute(f"ALTER TABLE stock_movements ADD COLUMN {column} {definition}")
+    db.execute("CREATE TABLE IF NOT EXISTS item_categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_id INTEGER, UNIQUE(name,parent_id))")
+    db.execute("CREATE TABLE IF NOT EXISTS item_units (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
+    db.execute("""CREATE TABLE IF NOT EXISTS physical_counts (id INTEGER PRIMARY KEY, number TEXT NOT NULL UNIQUE, count_date TEXT NOT NULL, warehouse_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft', lines TEXT NOT NULL, adjustment_numbers TEXT, notes TEXT, created_by INTEGER, created_at TEXT NOT NULL)""")
+    item_columns = {row["name"] for row in db.execute("PRAGMA table_info(inventory_items)")}
+    for column in ("subcategory", "supplier_id", "location"):
+        if column not in item_columns: db.execute(f"ALTER TABLE inventory_items ADD COLUMN {column} TEXT")
+    for unit in ("unit", "piece", "sheet", "m", "m2", "kg", "box", "roll", "set"): db.execute("INSERT OR IGNORE INTO item_units(name) VALUES(?)", (unit,))
     db.execute("INSERT OR IGNORE INTO warehouses(code,name) VALUES('MAIN','Main Store')")
     db.execute("INSERT OR IGNORE INTO app_settings(key,value) VALUES('inventory_currency','USD')")
     db.execute("INSERT OR IGNORE INTO app_settings(key,value) VALUES('inventory_method','average')")
@@ -83,12 +91,17 @@ def save_item(database, item, user_id):
             numbers = [int(r["sku"][4:]) for r in db.execute("SELECT sku FROM inventory_items WHERE sku GLOB 'ITM-[0-9]*'") if r["sku"][4:].isdigit()]
             sku = f"ITM-{max(numbers, default=0) + 1:05d}"
         if db.execute("SELECT 1 FROM inventory_items WHERE sku=? AND id<>?", (sku, int(item.get("id") or 0))).fetchone(): raise ValueError(f"Item code {sku} is already used")
-        values = (sku, name, str(item.get("unit") or "unit").strip() or "unit", str(item.get("category") or "").strip() or None, str(reorder), str(price),
-                  1 if item.get("active", True) else 0, str(item.get("notes") or "").strip() or None, str(item.get("barcode") or "").strip() or None)
+        supplier = item.get("supplier_id")
+        if not supplier and str(item.get("supplier_name") or "").strip():
+            row = db.execute("SELECT id FROM parties WHERE name=? ORDER BY id LIMIT 1", (str(item["supplier_name"]).strip(),)).fetchone(); supplier = row["id"] if row else None
+        unit = str(item.get("unit") or "unit").strip() or "unit"; db.execute("INSERT OR IGNORE INTO item_units(name) VALUES(?)", (unit,))
+        values = (sku, name, unit, str(item.get("category") or "").strip() or None, str(reorder), str(price),
+                  1 if item.get("active", True) else 0, str(item.get("notes") or "").strip() or None, str(item.get("barcode") or "").strip() or None,
+                  str(item.get("subcategory") or "").strip() or None, str(supplier) if supplier else None, str(item.get("location") or "").strip() or None)
         if item.get("id"):
-            db.execute("UPDATE inventory_items SET sku=?,name=?,unit=?,category=?,reorder_level=?,sales_price=?,active=?,notes=?,barcode=? WHERE id=?", values + (int(item["id"]),)); saved = int(item["id"])
+            db.execute("UPDATE inventory_items SET sku=?,name=?,unit=?,category=?,reorder_level=?,sales_price=?,active=?,notes=?,barcode=?,subcategory=?,supplier_id=?,location=? WHERE id=?", values + (int(item["id"]),)); saved = int(item["id"])
         else:
-            saved = db.execute("INSERT INTO inventory_items(sku,name,unit,category,reorder_level,sales_price,active,notes,barcode,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", values + (utcnow(),)).lastrowid
+            saved = db.execute("INSERT INTO inventory_items(sku,name,unit,category,reorder_level,sales_price,active,notes,barcode,subcategory,supplier_id,location,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", values + (utcnow(),)).lastrowid
         db.execute("INSERT INTO audit_log(user_id,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?)", (user_id, "save", "inventory_item", saved, json.dumps({"sku": sku}), utcnow()))
     return next(i for i in list_items(database) if i["id"] == saved)
 
@@ -143,8 +156,11 @@ def run_costing(database, date_to=None, method=None, callback=None):
 def list_items(database, date_to=None, include_inactive=True):
     state = run_costing(database, iso_date(date_to) if date_to else None)
     with database.connect() as db:
-        items = [dict(r) for r in db.execute("SELECT * FROM inventory_items ORDER BY sku")]
+        items = [dict(r) for r in db.execute("SELECT i.*,p.name supplier_name FROM inventory_items i LEFT JOIN parties p ON p.id=CAST(i.supplier_id AS INTEGER) ORDER BY i.sku")]
+        last = {r["item_id"]: r["party_name"] for r in db.execute("""SELECT m.item_id,p.name party_name FROM stock_movements m JOIN stock_documents d ON d.id=m.document_id
+            JOIN parties p ON p.id=d.party_id WHERE d.doc_type='receipt' ORDER BY d.doc_date,d.id""")}
     for item in items:
+        item["supplier_name"] = item.get("supplier_name") or last.get(item["id"]) or ""
         data = state.get(item["id"], {})
         item["quantity"] = float(data.get("qty", ZERO)); item["average_cost"] = float(data.get("avg", ZERO)); item["stock_value"] = float(data.get("value", ZERO))
         item["reorder_level"] = float(_d(item.get("reorder_level"))); item["sales_price"] = float(_d(item.get("sales_price")))
@@ -310,9 +326,20 @@ def build_report(database, report, options):
     date_from = iso_date(options["date_from"]) if options.get("date_from") else f"{date_to[:4]}-01-01"
     warehouse = options.get("warehouse_id"); warehouse = int(warehouse) if str(warehouse or "").isdigit() else None
     items, warehouses = _names(database); company = database.settings(); sections = []
+    filters = [f"{label}: {options[key]}" for key, label in (("category", "Category"), ("subcategory", "Subcategory"), ("unit", "Unit"), ("supplier_name", "Supplier")) if options.get(key)]
     wanted = lambda item_id: not options.get("item_id") or int(options["item_id"]) == item_id
-    category = str(options.get("category") or "").strip()
-    in_category = lambda item_id: not category or (items[item_id].get("category") or "") == category
+    category = str(options.get("category") or "").strip(); subcategory = str(options.get("subcategory") or "").strip()
+    unit_filter = str(options.get("unit") or "").strip(); supplier_filter = str(options.get("supplier_id") or "").strip()
+    listed = {i["id"]: i for i in list_items(database)} if supplier_filter else {}
+    def in_category(item_id):
+        item = items[item_id]
+        if category and (item.get("category") or "") != category: return False
+        if subcategory and (item.get("subcategory") or "") != subcategory: return False
+        if unit_filter and (item.get("unit") or "") != unit_filter: return False
+        if supplier_filter:
+            data = listed.get(item_id, {})
+            if str(item.get("supplier_id") or "") != supplier_filter and data.get("supplier_name") != options.get("supplier_name"): return False
+        return True
     if report == "valuation":
         state = run_costing(database, date_to, method)
         headers = ["Item Code", "Item", "Category", "Unit", "Quantity", f"Unit Cost ({currency})", f"Stock Value ({currency})", "Sales Price", "Value at Sales Price", "Reorder Level", "Status"]
@@ -400,7 +427,7 @@ def build_report(database, report, options):
                                                           "headers": ["Item Code", "Item", "Unit", "On Hand", f"Value ({currency})", "Last Issue"], "rows": rows or [["No slow-moving items"] + [""] * 5], "total_rows": []})
     else: raise ValueError("Unknown inventory report")
     meta = [f"Company: {company.get('company_name') or '-'}   Inventory currency: {currency}   Costing: {'FIFO' if method == 'fifo' else 'Weighted average'}",
-            f"Period: {display_date(date_from)} to {display_date(date_to)}"]
+            f"Period: {display_date(date_from)} to {display_date(date_to)}" + (("   Filters: " + ", ".join(filters)) if filters else "")]
     return {"title": title, "meta": meta, "sections": sections}
 
 
@@ -465,3 +492,94 @@ def carry_forward(source, target, year, user_id):
         doc = save_document(target, {"doc_type": "opening", "doc_date": f"01-01-{year}", "warehouse_id": warehouse_id, "notes": f"Closing stock of {year - 1}"}, lines, user_id)
         created.append(doc["number"])
     return created
+
+
+# ---------------------------------------------------------------- categories, units
+def list_categories(database):
+    with database.connect() as db:
+        rows = [dict(r) for r in db.execute("SELECT * FROM item_categories ORDER BY name")]
+        units = [r["name"] for r in db.execute("SELECT name FROM item_units ORDER BY name")]
+        for name in {r["category"] for r in db.execute("SELECT DISTINCT category FROM inventory_items WHERE category IS NOT NULL AND category<>''")}:
+            if not any(c["name"] == name and not c["parent_id"] for c in rows): rows.append({"id": None, "name": name, "parent_id": None})
+    top = [c for c in rows if not c["parent_id"]]
+    return {"categories": [{"id": c["id"], "name": c["name"], "subcategories": [s["name"] for s in rows if s["parent_id"] and s["parent_id"] == c["id"]]} for c in sorted(top, key=lambda c: c["name"])],
+            "units": units}
+
+
+def save_category(database, item, user_id):
+    name = str(item.get("name") or "").strip(); kind = str(item.get("kind") or "category")
+    if not name: raise ValueError("Enter the name")
+    with database.connect() as db:
+        if kind == "unit": db.execute("INSERT OR IGNORE INTO item_units(name) VALUES(?)", (name,))
+        elif kind == "subcategory":
+            parent = str(item.get("parent") or "").strip()
+            if not parent: raise ValueError("Choose the category of the subcategory")
+            db.execute("INSERT OR IGNORE INTO item_categories(name,parent_id) VALUES(?,NULL)", (parent,))
+            parent_id = db.execute("SELECT id FROM item_categories WHERE name=? AND parent_id IS NULL", (parent,)).fetchone()["id"]
+            db.execute("INSERT OR IGNORE INTO item_categories(name,parent_id) VALUES(?,?)", (name, parent_id))
+        else:
+            if not db.execute("SELECT 1 FROM item_categories WHERE name=? AND parent_id IS NULL", (name,)).fetchone(): db.execute("INSERT INTO item_categories(name,parent_id) VALUES(?,NULL)", (name,))
+    return list_categories(database)
+
+
+def find_or_create_item(database, name, unit="unit", code=None, user_id=None, supplier_id=None):
+    """Used by the purchase import: an item that does not exist yet is created automatically."""
+    with database.connect() as db:
+        row = db.execute("SELECT * FROM inventory_items WHERE (sku=? AND ?<>'') OR lower(name)=lower(?) ORDER BY id LIMIT 1", (str(code or "").upper(), str(code or ""), str(name or ""))).fetchone()
+    if row: return dict(row)
+    return save_item(database, {"sku": code or "", "name": name, "unit": unit or "unit", "supplier_id": supplier_id}, user_id)
+
+
+# ---------------------------------------------------------------- physical inventory
+def count_sheet(database, warehouse_id, date):
+    """System quantity of every active item in a warehouse on a date, ready for counting."""
+    date = iso_date(date); state = run_costing(database, date); warehouse = int(warehouse_id)
+    return [{"item_id": i["id"], "sku": i["sku"], "name": i["name"], "unit": i["unit"], "category": i.get("category") or "", "location": i.get("location") or "",
+             "system_qty": float(state.get(i["id"], {}).get("by_warehouse", {}).get(warehouse, ZERO)), "unit_cost": float(state.get(i["id"], {}).get("avg", ZERO))}
+            for i in list_items(database, include_inactive=False)]
+
+
+def save_count(database, header, lines, user_id, count_id=None, post=False):
+    date = iso_date(header.get("count_date"), "Count date"); warehouse = int(header.get("warehouse_id") or 0)
+    if not warehouse: raise ValueError("Choose the warehouse")
+    clean = []
+    for line in lines or []:
+        if line.get("counted") in (None, ""): continue
+        counted = _d(line["counted"])
+        if counted < 0: raise ValueError(f"{line.get('sku')}: the counted quantity cannot be negative")
+        clean.append({"item_id": int(line["item_id"]), "sku": line.get("sku"), "counted": str(counted)})
+    with database.connect() as db:
+        if count_id:
+            row = db.execute("SELECT * FROM physical_counts WHERE id=?", (int(count_id),)).fetchone()
+            if not row: raise KeyError("Count not found")
+            if row["status"] == "posted": raise ValueError("This count is already posted to the stock")
+            db.execute("UPDATE physical_counts SET count_date=?,warehouse_id=?,lines=?,notes=? WHERE id=?", (date, warehouse, json.dumps(clean), header.get("notes"), int(count_id))); saved = int(count_id)
+        else:
+            numbers = [int(r["number"].rsplit("-", 1)[-1]) for r in db.execute("SELECT number FROM physical_counts WHERE number LIKE ?", (f"PHC-{date[:4]}-%",)) if r["number"].rsplit("-", 1)[-1].isdigit()]
+            saved = db.execute("INSERT INTO physical_counts(number,count_date,warehouse_id,lines,notes,created_by,created_at) VALUES(?,?,?,?,?,?,?)",
+                (f"PHC-{date[:4]}-{max(numbers, default=0) + 1:06d}", date, warehouse, json.dumps(clean), header.get("notes"), user_id, utcnow())).lastrowid
+    if post:
+        system = {l["item_id"]: l for l in count_sheet(database, warehouse, date)}; gains = []; losses = []
+        for line in clean:
+            difference = _d(line["counted"]) - _d(system.get(line["item_id"], {}).get("system_qty", 0))
+            if difference > 0: gains.append({"item_id": line["item_id"], "quantity": difference, "unit_cost": system.get(line["item_id"], {}).get("unit_cost", 0) or 0})
+            elif difference < 0: losses.append({"item_id": line["item_id"], "quantity": -difference})
+        numbers = []
+        with database.connect() as db: number = db.execute("SELECT number FROM physical_counts WHERE id=?", (saved,)).fetchone()["number"]
+        if gains: numbers.append(save_document(database, {"doc_type": "adjustment_in", "doc_date": date, "warehouse_id": warehouse, "reference": number, "notes": f"Physical count {number}"}, gains, user_id)["number"])
+        if losses: numbers.append(save_document(database, {"doc_type": "adjustment_out", "doc_date": date, "warehouse_id": warehouse, "reference": number, "notes": f"Physical count {number}"}, losses, user_id)["number"])
+        with database.connect() as db: db.execute("UPDATE physical_counts SET status='posted',adjustment_numbers=? WHERE id=?", (", ".join(numbers), saved))
+    return get_count(database, saved)
+
+
+def get_count(database, count_id):
+    with database.connect() as db:
+        row = db.execute("SELECT c.*,w.code warehouse_code FROM physical_counts c JOIN warehouses w ON w.id=c.warehouse_id WHERE c.id=?", (int(count_id),)).fetchone()
+    if not row: raise KeyError("Count not found")
+    result = dict(row); result["lines"] = json.loads(result["lines"] or "[]"); return result
+
+
+def list_counts(database):
+    with database.connect() as db:
+        return [dict(r) for r in db.execute("SELECT c.id,c.number,c.count_date,c.status,c.adjustment_numbers,w.code warehouse_code FROM physical_counts c JOIN warehouses w ON w.id=c.warehouse_id ORDER BY c.id DESC")]
+
