@@ -727,6 +727,17 @@ class Database:
         return None
 
     def clear_invoices(self, user_id, make_backup=True):
+        with self.connect() as db:
+            if db.execute("SELECT 1 FROM payment_allocations LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked while payments are allocated to existing invoices")
+            if db.execute("SELECT 1 FROM stock_documents WHERE invoice_id IS NOT NULL LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked while stock documents are linked to invoices")
+            if db.execute("SELECT 1 FROM vat_returns LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked after a quarterly VAT return has been saved")
+            if db.execute("SELECT 1 FROM fiscal_years WHERE status='closed' LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked while a fiscal year is closed")
+            if db.execute("SELECT 1 FROM invoices WHERE CAST(COALESCE(amount_paid,'0') AS REAL)>0 LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked while existing invoices have payments recorded")
         backup_path = self.backup("safety") if make_backup else None
         with self.connect() as db:
             entry_ids = [r["id"] for r in db.execute("SELECT id FROM journal_entries WHERE source_type IN ('invoice','invoice_reversal','vat_reclass') AND (source_type!='vat_reclass' OR entry_number LIKE 'VATND-INV-%')")]

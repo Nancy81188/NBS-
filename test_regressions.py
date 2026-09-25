@@ -91,5 +91,16 @@ class DataSafetyTest(unittest.TestCase):
         self.assertEqual([row["invoice_number"] for row in invoices[:2]],["101","102"])
         self.assertIn("scanned",invoices[2]["notes"])
 
+    def test_replacement_rejects_allocated_invoices(self):
+        db=Database(self.database)
+        user=db.user_for_token(db.login("admin","secret12345")["token"])["id"]
+        with db.connect() as connection:
+            invoice=connection.execute("SELECT id FROM invoices LIMIT 1").fetchone()
+            payment=connection.execute("SELECT id FROM payments LIMIT 1").fetchone()
+            connection.execute("INSERT INTO payment_allocations(payment_id,invoice_id,amount,created_at) VALUES(?,?,?,?)",
+                               (payment["id"],invoice["id"],"1","2024-03-01"))
+        with self.assertRaisesRegex(ValueError,"allocated"):
+            db.clear_invoices(user,make_backup=False)
+
 
 if __name__=="__main__": unittest.main()
