@@ -833,83 +833,83 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.sales_party=tk.StringVar(); self.sales_kind=tk.StringVar(value="sales"); self.sales_currency=tk.StringVar(value="USD")
         self.sales_supplier_account=tk.StringVar(value="")
         self.sales_vat_account=tk.StringVar(value="4427")
-        self.sales_expense_account=tk.StringVar(value="713100000")
+        self.sales_expense_account=tk.StringVar(value="713000001")
         self.sales_expense_no_vat_account=tk.StringVar(value="601100001")
         self.sales_supplier_side=tk.StringVar(value="D - Debit"); self.sales_vat_side=tk.StringVar(value="C - Credit"); self.sales_expense_side=tk.StringVar(value="C - Credit"); self.sales_expense_no_vat_side=tk.StringVar(value="C - Credit")
         self.sales_due_date=tk.StringVar(); self.sales_payment_method=tk.StringVar(value="On Account (Not Cash)"); self.sales_amount_paid=tk.StringVar(value="0"); self.sales_branch=tk.StringVar(value="Head Office")
-        self.sales_open_choice=tk.StringVar()
+        self.sales_open_choice=tk.StringVar(); self.sales_doc_type=tk.StringVar(value="Invoice"); self.sales_category=tk.StringVar(value="Services")
         details=ttk.Notebook(header); details.pack(fill="x")
         invoice_details=tk.Frame(details,bg=LIGHT); account_details=tk.Frame(details,bg=LIGHT)
         details.add(invoice_details,text="Invoice details"); details.add(account_details,text="Posting accounts")
         top=tk.Frame(invoice_details,bg=LIGHT); top.pack(anchor="w",fill="x",pady=(3,0))
+        doc_box=ttk.Combobox(top,textvariable=self.sales_doc_type,values=["Invoice","Credit Note"],state="readonly",width=11)
+        doc_box.pack(side="left",padx=(0,8)); doc_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_doc_type_changed())
         tk.Label(top,text="Invoice No.",bg=LIGHT,font=("Segoe UI",9,"bold")).pack(side="left",padx=(0,4))
         tk.Entry(top,textvariable=self.sales_no,width=18,font=("Segoe UI",10,"bold"),state="readonly",readonlybackground="white").pack(side="left",padx=(0,12))
-        tk.Label(top,text="Date",bg=LIGHT).pack(side="left"); self.date_entry(top,self.sales_date,12).pack(side="left",padx=(4,12))
         tk.Label(top,text="Customer",bg=LIGHT).pack(side="left")
-        self.sales_party_box=ttk.Combobox(top,textvariable=self.sales_party,width=26); self.sales_party_box.pack(side="left",padx=(4,12))
+        self.sales_party_box=ttk.Combobox(top,textvariable=self.sales_party,width=23); self.sales_party_box.pack(side="left",padx=(4,10))
         self.sales_party_box.bind("<KeyRelease>",self.search_sales_customers); self.sales_party_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_customer_chosen())
+        self.sales_party_box.bind("<Return>",lambda _event:self.select_searched_sales_customer())
         tk.Label(top,text="Client Account",bg=LIGHT).pack(side="left",padx=(0,4))
-        tk.Entry(top,textvariable=self.sales_supplier_account,width=14).pack(side="left",padx=(0,12))
+        tk.Entry(top,textvariable=self.sales_supplier_account,width=12).pack(side="left",padx=(0,10))
         tk.Label(top,text="Currency",bg=LIGHT).pack(side="left")
-        ttk.Combobox(top,textvariable=self.sales_currency,values=["USD","EUR","LBP","AED"],state="readonly",width=6).pack(side="left",padx=(4,12))
-        self.sales_mode_label=tk.Label(top,text="NEW INVOICE",bg=GOLD,fg=NAVY,font=("Segoe UI",8,"bold"),padx=8); self.sales_mode_label.pack(side="left",padx=6)
+        ttk.Combobox(top,textvariable=self.sales_currency,values=["USD","EUR","LBP","AED"],state="readonly",width=6).pack(side="left",padx=(4,8))
+        tk.Label(top,text="Find No.",bg=LIGHT).pack(side="left",padx=(0,3))
+        self.sales_open_box=ttk.Combobox(top,textvariable=self.sales_open_choice,width=17); self.sales_open_box.pack(side="left",padx=(0,4))
+        self.sales_open_box.bind("<<ComboboxSelected>>",lambda _event:self.open_sales_invoice()); self.sales_open_box.bind("<KeyRelease>",self.search_open_sales)
+        self.sales_open_box.bind("<Return>",lambda _event:self.open_sales_by_number())
+        self.sales_previous=tk.Button(top,text="◀",command=lambda:self.navigate_sales_invoice(-1),bg=NAVY,fg="white",border=0,padx=7,pady=3)
+        self.sales_previous.pack(side="left",padx=2)
+        self.sales_next=tk.Button(top,text="▶",command=lambda:self.navigate_sales_invoice(1),bg=NAVY,fg="white",border=0,padx=7,pady=3)
+        self.sales_next.pack(side="left",padx=2)
         account_fields=[("Client Account",self.sales_supplier_account,self.sales_supplier_side),("VAT Account",self.sales_vat_account,self.sales_vat_side),("Revenue Account",self.sales_expense_account,self.sales_expense_side)]
         for label,var,side in account_fields:
             row=tk.Frame(account_details,bg=LIGHT); row.pack(anchor="w",pady=2)
-            tk.Label(row,text=label,bg=LIGHT,width=17,anchor="w").pack(side="left",padx=(6,4))
+            caption=tk.Label(row,text=label,bg=LIGHT,width=17,anchor="w"); caption.pack(side="left",padx=(6,4))
+            if label=="Revenue Account": self.sales_revenue_caption=caption
             self.account_search_box(row,var,28).pack(side="left",padx=(0,12))
             side_box=ttk.Combobox(row,textvariable=side,values=["D - Debit","C - Credit"],state="readonly",width=11); side_box.pack(side="left",padx=(3,10))
             side_box.bind("<<ComboboxSelected>>",lambda _event:self.update_sales_totals())
-        credit_accounts=tk.Frame(account_details,bg=LIGHT); credit_accounts.pack(anchor="w",pady=(3,2))
-        tk.Label(credit_accounts,text="Credit Note account:",bg=LIGHT).pack(side="left",padx=(6,6))
-        for label,code in (("Goods (709)","709000001"),("Services / production (719)","719000001")):
-            tk.Button(credit_accounts,text=label,command=lambda account=code:self.choose_sales_credit_account(account),
-                      bg="#dfe6ee",fg=NAVY,border=0,padx=9,pady=3).pack(side="left",padx=(0,5))
         payment=tk.Frame(invoice_details,bg=LIGHT); payment.pack(anchor="w",fill="x",pady=(3,0))
+        tk.Label(payment,text="Date",bg=LIGHT).pack(side="left"); self.date_entry(payment,self.sales_date,12).pack(side="left",padx=(4,10))
+        tk.Label(payment,text="Sales Type",bg=LIGHT).pack(side="left")
+        self.sales_category_box=ttk.Combobox(payment,textvariable=self.sales_category,values=["Goods","Products","Services"],state="readonly",width=12)
+        self.sales_category_box.pack(side="left",padx=(4,10)); self.sales_category_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_category_changed())
         tk.Label(payment,text="Payment Mode",bg=LIGHT).pack(side="left")
-        ttk.Combobox(payment,textvariable=self.sales_payment_method,values=["On Account (Not Cash)","Cash","Bank Transfer","Cheque","Card","Other"],state="readonly",width=20).pack(side="left",padx=(4,12))
-        tk.Label(payment,text="Due Date",bg=LIGHT).pack(side="left"); self.date_entry(payment,self.sales_due_date,12).pack(side="left",padx=(4,12))
-        tk.Label(payment,text="Amount Paid",bg=LIGHT).pack(side="left"); tk.Entry(payment,textvariable=self.sales_amount_paid,width=12).pack(side="left",padx=(4,12))
-        tk.Label(payment,text="Branch",bg=LIGHT).pack(side="left"); self.branch_selector(payment,self.sales_branch,16,False).pack(side="left",padx=(4,10))
+        ttk.Combobox(payment,textvariable=self.sales_payment_method,values=["On Account (Not Cash)","Cash","Bank Transfer","Cheque","Card","Other"],state="readonly",width=18).pack(side="left",padx=(4,10))
+        tk.Label(payment,text="Due Date",bg=LIGHT).pack(side="left"); self.date_entry(payment,self.sales_due_date,12).pack(side="left",padx=(4,10))
+        tk.Label(payment,text="Amount Paid",bg=LIGHT).pack(side="left"); tk.Entry(payment,textvariable=self.sales_amount_paid,width=10).pack(side="left",padx=(4,10))
+        tk.Label(payment,text="Branch",bg=LIGHT).pack(side="left"); self.branch_selector(payment,self.sales_branch,14,False).pack(side="left",padx=(4,6))
         dims=tk.Frame(invoice_details,bg=LIGHT); dims.pack(anchor="w",fill="x",pady=(3,0))
         self.sales_department=tk.StringVar(); self.sales_project=tk.StringVar(); self.dimension_selectors(dims,self.sales_department,self.sales_project)
         self.sales_treatment=tk.StringVar(value="Taxable 11%")
         tk.Label(dims,text="VAT Treatment",bg=LIGHT,font=("Segoe UI",9,"bold")).pack(side="left",padx=(6,4))
         treatment_box=ttk.Combobox(dims,textvariable=self.sales_treatment,values=list(SALE_TREATMENTS),state="readonly",width=19); treatment_box.pack(side="left")
         treatment_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_treatment_changed())
-        self.sales_exchange=tk.Label(dims,text="",bg=LIGHT,fg="#5f6b76",anchor="w"); self.sales_exchange.pack(side="left",padx=(12,0))
+        self.sales_mode_label=tk.Label(dims,text="NEW INVOICE",bg=GOLD,fg=NAVY,font=("Segoe UI",8,"bold"),padx=8)
+        self.sales_mode_label.pack(side="left",padx=(12,0))
         self.sales_payment_method.trace_add("write",lambda *_args:self.sales_payment_changed())
         self.sales_supplier_account.trace_add("write",lambda *_args:self.sales_account_chosen())
         self.sales_currency.trace_add("write",lambda *_args:self.update_sales_totals())
         self.sales_date.trace_add("write",lambda *_args:self.sales_date_changed())
 
-        self.sales_doc_type=tk.StringVar(value="Invoice"); self.sales_discount_percent=tk.StringVar(value="0"); self.sales_discount_amount=tk.StringVar(value="0")
+        self.sales_discount_percent=tk.StringVar(value="0"); self.sales_discount_amount=tk.StringVar(value="0")
         toolbar=tk.Frame(self.sales_tab,bg=LIGHT); toolbar.pack(fill="x",padx=10,pady=(2,0))
-        doc_box=ttk.Combobox(toolbar,textvariable=self.sales_doc_type,values=["Invoice","Credit Note"],state="readonly",width=11); doc_box.pack(side="left",padx=(0,6))
-        doc_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_doc_type_changed())
         self.action_button(toolbar,"New",self.new_sales_invoice).pack(side="left",padx=2)
         self.action_button(toolbar,"Add Line",self.add_sales_item).pack(side="left",padx=2)
         tk.Button(toolbar,text="Delete Line",command=self.remove_sales_item,bg="#8B1E1E",fg="white",border=0,padx=10,pady=4).pack(side="left",padx=2)
         tk.Button(toolbar,text="Save",command=lambda:self.save_sales_invoice(False),bg=NAVY,fg="white",font=("Segoe UI",10,"bold"),border=0,padx=14,pady=4).pack(side="left",padx=(8,2))
         tk.Button(toolbar,text="Save & Post",command=lambda:self.save_sales_invoice(True),bg=GOLD,fg=NAVY,font=("Segoe UI",10,"bold"),border=0,padx=14,pady=4).pack(side="left",padx=2)
         self.action_button(toolbar,"Duplicate",self.duplicate_sales_invoice).pack(side="left",padx=(8,2))
-        tk.Label(toolbar,text="Find No.",bg=LIGHT).pack(side="left",padx=(8,2))
-        self.sales_open_box=ttk.Combobox(toolbar,textvariable=self.sales_open_choice,width=18); self.sales_open_box.pack(side="left",padx=(0,4))
-        self.sales_open_box.bind("<<ComboboxSelected>>",lambda _event:self.open_sales_invoice()); self.sales_open_box.bind("<KeyRelease>",self.search_open_sales)
-        self.sales_open_box.bind("<Return>",lambda _event:self.open_sales_by_number())
-        self.sales_previous=tk.Button(toolbar,text="◀",command=lambda:self.navigate_sales_invoice(-1),bg=NAVY,fg="white",border=0,padx=8,pady=4)
-        self.sales_previous.pack(side="left",padx=2)
-        self.sales_next=tk.Button(toolbar,text="▶",command=lambda:self.navigate_sales_invoice(1),bg=NAVY,fg="white",border=0,padx=8,pady=4)
-        self.sales_next.pack(side="left",padx=2)
         toolbar2=tk.Frame(self.sales_tab,bg=LIGHT); toolbar2.pack(fill="x",padx=10,pady=(2,0))
         for text,command in (("Print Preview",lambda:self.sales_invoice_pdf("preview")),("PDF",lambda:self.sales_invoice_pdf("pdf")),("Print",lambda:self.sales_invoice_pdf("print")),
                              ("Excel",lambda:self.sales_entry_report("xlsx"))):
             tk.Button(toolbar2,text=text,command=command,bg=NAVY,fg="white",border=0,padx=10,pady=4).pack(side="left",padx=2)
-        for text,command in (("Import Excel",self.import_sales_excel),("Download Import Template",lambda:self.save_invoice_template("sales")),("Import PDF",self.import_sales_pdf)):
+        for text,command in (("Import Excel",self.import_sales_excel),("Import PDF",self.import_sales_pdf)):
             tk.Button(toolbar2,text=text,command=command,bg=GOLD,fg=NAVY,border=0,padx=10,pady=4).pack(side="left",padx=(8 if text=="Import Excel" else 2,2))
-        totals=tk.Frame(self.sales_tab,bg=LIGHT); totals.pack(side="bottom",fill="x",padx=10,pady=(2,4))
-        self.sales_words=tk.Label(totals,text="",bg=LIGHT,fg="#5f6b76",anchor="w",justify="left",wraplength=400); self.sales_words.pack(side="left",fill="x",expand=True,padx=4)
-        box=tk.Frame(totals,bg="#dfe6ee",padx=8,pady=4); box.pack(side="right")
+        body=tk.Frame(self.sales_tab,bg=LIGHT); body.pack(fill="both",expand=True,padx=10,pady=(2,4))
+        totals=tk.Frame(body,bg=LIGHT); totals.pack(side="right",fill="y",padx=(8,0))
+        box=tk.Frame(totals,bg="#dfe6ee",padx=8,pady=3); box.pack(side="top",fill="x")
         discount=tk.Frame(box,bg="#dfe6ee"); discount.grid(row=1,column=0,sticky="e")
         tk.Label(discount,text="Discount %",bg="#dfe6ee").pack(side="left"); e1=tk.Entry(discount,textvariable=self.sales_discount_percent,width=5); e1.pack(side="left",padx=2)
         tk.Label(discount,text="or amount",bg="#dfe6ee").pack(side="left"); e2=tk.Entry(discount,textvariable=self.sales_discount_amount,width=9); e2.pack(side="left",padx=2)
@@ -922,10 +922,11 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
                 if key=="VAT": self.sales_vat_caption=label
             value=tk.Label(box,text="0.00",bg="#dfe6ee",width=11,anchor="e",font=("Segoe UI",10 if key=="TOTAL" else 9,"bold" if key in ("Total HT","TOTAL") else "normal"))
             value.grid(row=row,column=1,sticky="e"); self.sales_total_labels[key]=value
-        self.sales_vat_lbp=tk.Label(box,text="VAT (LBP): 0.00",bg="#dfe6ee",fg=NAVY,anchor="e",font=("Segoe UI",9,"bold"))
-        self.sales_vat_lbp.grid(row=5,column=0,columnspan=2,sticky="e",padx=4)
-        self.sales_totals=tk.Label(totals,text="",bg=LIGHT,fg=NAVY); self.sales_totals.pack(side="right",padx=8)
-        sheet_frame=tk.Frame(self.sales_tab,bg=LIGHT); sheet_frame.pack(fill="both",expand=True,padx=10,pady=(2,3))
+        self.sales_totals=tk.Label(totals,text="",bg=LIGHT,fg=NAVY); self.sales_totals.pack(side="top",anchor="e",padx=8,pady=3)
+        items_area=tk.Frame(body,bg=LIGHT); items_area.pack(side="left",fill="both",expand=True)
+        self.sales_words=tk.Label(items_area,text="",bg=LIGHT,fg="#5f6b76",anchor="w",justify="left",wraplength=800)
+        self.sales_words.pack(side="bottom",fill="x",padx=4,pady=(3,0))
+        sheet_frame=tk.Frame(items_area,bg=LIGHT); sheet_frame.pack(fill="both",expand=True)
         self.sales_columns=[("item_code","Item",90),("description","Description",250),("quantity","Qty",55),("unit","Unit",60),("unit_price","Unit Price",95),
             ("gross_amount","Total Amount",105),("discount_percent","Discount %",80),("vat_rate","VAT %",60),("total","Net",105)]
         self.sales_sheet=ttk.Treeview(sheet_frame,columns=[c[0] for c in self.sales_columns],show="headings",height=8,style="Sales.Treeview")
@@ -965,7 +966,13 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         try: invoices=[r for r in self.client.invoices() if r["kind"]=="sale" and r.get("status")!="cancelled"]
         except Exception: invoices=[]
         invoices.sort(key=lambda r:(sortable_date(r["invoice_date"]),str(r["invoice_number"]),r["id"]))
-        self.sales_open_map={f'{r["invoice_number"]} | {r["invoice_date"]} | {r["party_name"]} | {float(r["total"] or 0):,.2f} {r["currency"]}':r for r in invoices}
+        self.sales_open_map={}
+        for row in invoices:
+            number=str(row["invoice_number"])
+            label=number; duplicate=2
+            while label in self.sales_open_map:
+                label=f"{number} ({duplicate})"; duplicate+=1
+            self.sales_open_map[label]=row
         self.sales_open_all=invoices
         self.sales_open_box["values"]=list(self.sales_open_map)
         self.update_sales_navigation()
@@ -974,28 +981,41 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         keys=list(getattr(self,"sales_open_map",{}))
         current=next((i for i,key in enumerate(keys) if self.sales_edit_id and self.sales_open_map[key]["id"]==self.sales_edit_id),None)
         if hasattr(self,"sales_previous"):
-            self.sales_previous.config(state="normal" if current is not None and current>0 else "disabled")
-            self.sales_next.config(state="normal" if current is not None and current<len(keys)-1 else "disabled")
+            self.sales_previous.config(state="normal" if keys and (current is None or current>0) else "disabled")
+            self.sales_next.config(state="normal" if keys and (current is None or current<len(keys)-1) else "disabled")
 
     def navigate_sales_invoice(self,step):
         keys=list(getattr(self,"sales_open_map",{}))
         current=next((i for i,key in enumerate(keys) if self.sales_edit_id and self.sales_open_map[key]["id"]==self.sales_edit_id),None)
-        if current is None or not 0<=current+step<len(keys): return
+        index=(len(keys)-1 if step<0 else 0) if current is None else current+step
+        if not 0<=index<len(keys): return
         previous=self.sales_open_choice.get()
-        self.sales_open_choice.set(keys[current+step])
+        self.sales_open_choice.set(keys[index])
         if not self.open_sales_invoice(): self.sales_open_choice.set(previous)
 
     def search_sales_customers(self,_event=None):
         typed=self.sales_party.get().strip().casefold(); names=list(getattr(self,"sales_customers",{}))
-        self.sales_party_box["values"]=[n for n in names if typed in n.casefold()] if typed else names
+        found=[name for name in names if name.casefold().startswith(typed)]
+        found += [name for name in names if typed in name.casefold() and name not in found]
+        self.sales_party_box["values"]=found if typed else names
+        if typed and found:
+            if len(found)==1 and found[0].casefold()==typed:
+                self.sales_party.set(found[0]); self.sales_customer_chosen()
+            elif _event is not None and _event.keysym not in ("Up","Down","Return","Escape"):
+                self.sales_party_box.after_idle(lambda:self.sales_party_box.event_generate("<Down>"))
+
+    def select_searched_sales_customer(self):
+        choices=list(self.sales_party_box["values"])
+        if len(choices)==1:
+            self.sales_party.set(choices[0]); self.sales_customer_chosen()
 
     def search_open_sales(self,_event=None):
         """Type only the number: 12 finds SAL-2026-000012 (and CN / DN numbers)."""
         typed=self.sales_open_choice.get().strip(); choices=list(getattr(self,"sales_open_map",{}))
         if typed.isdigit():
-            wanted=int(typed); found=[c for c in choices if c.split(" | ")[0].rsplit("-",1)[-1].isdigit() and int(c.split(" | ")[0].rsplit("-",1)[-1])==wanted]
-            self.sales_open_box["values"]=found or [c for c in choices if typed in c.split(" | ")[0]]
-        else: self.sales_open_box["values"]=[c for c in choices if row_matches_search((c,),typed)] if typed else choices
+            wanted=int(typed); found=[c for c in choices if c.split(" (",1)[0].rsplit("-",1)[-1].isdigit() and int(c.split(" (",1)[0].rsplit("-",1)[-1])==wanted]
+            self.sales_open_box["values"]=found or [c for c in choices if typed in c.split(" (",1)[0]]
+        else: self.sales_open_box["values"]=[c for c in choices if typed.casefold() in c.split(" (",1)[0].casefold()] if typed else choices
 
     def sales_customer_chosen(self):
         party=getattr(self,"sales_customers",{}).get(self.sales_party.get())
@@ -1003,11 +1023,14 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
             self.sales_supplier_account.set(party.get("account_number") or "")
             if party.get("currency"): self.sales_currency.set(party["currency"])
 
-    def choose_sales_credit_account(self,code):
-        if self.sales_doc_type.get()!="Credit Note":
-            self.sales_doc_type.set("Credit Note")
-            self.sales_doc_type_changed()
-        self.sales_expense_account.set(code)
+    def sales_category_changed(self):
+        self.sales_vat_account.set("4427")
+        self.sales_expense_account.set(self.default_sales_posting_account())
+
+    def default_sales_posting_account(self):
+        category=self.sales_category.get()
+        if self.sales_doc_type.get()=="Credit Note": return "709000001" if category=="Goods" else "719000001"
+        return {"Goods":"701100001","Products":"711100001","Services":"713000001"}.get(category,"713000001")
 
     def sales_account_chosen(self):
         code=self.sales_supplier_account.get().split(" - ",1)[0].strip()
@@ -1023,13 +1046,14 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.sales_edit_id=None; self.sales_items=[]; self.sales_sheet.delete(*self.sales_sheet.get_children())
         self._sales_loaded_state=None
         self.sales_party.set(""); self.sales_supplier_account.set(""); self.sales_amount_paid.set("0"); self.sales_due_date.set(""); self.sales_open_choice.set("")
-        reverse=self.sales_doc_type.get()=="Credit Note"
-        self.sales_supplier_side.set("C - Credit" if reverse else "D - Debit")
-        self.sales_vat_side.set("D - Debit" if reverse else "C - Credit")
-        self.sales_expense_side.set("D - Debit" if reverse else "C - Credit")
+        self.sales_doc_type.set("Invoice"); self.sales_category.set("Services")
+        self.sales_category_box["values"]=["Goods","Products","Services"]
+        self.sales_revenue_caption.config(text="Revenue Account")
+        self.sales_supplier_side.set("D - Debit"); self.sales_vat_side.set("C - Credit"); self.sales_expense_side.set("C - Credit")
         self.sales_payment_method.set("On Account (Not Cash)"); self.sales_date.set(datetime.now().strftime("%d-%m-%Y"))
         self.sales_department.set("(none)"); self.sales_project.set("(none)"); self.sales_treatment.set("Taxable 11%")
         self.sales_discount_percent.set("0"); self.sales_discount_amount.set("0")
+        self.sales_category_changed()
         self.sales_mode_label.config(text="NEW INVOICE",bg=GOLD); self.load_sales_customer_list(); self.refresh_sales_number()
         self.update_sales_navigation()
         self.add_sales_item(); self.update_sales_totals()
@@ -1143,15 +1167,6 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
             from report_export import shape_arabic
             words=amount_in_words(result["grand_total"],currency); self.sales_words.config(text=f'{words["en"]}\n{shape_arabic(words["ar"])}')
         self.sales_totals.config(text=f'{len(lines)} line(s)')
-        if hasattr(self,"sales_exchange") or hasattr(self,"sales_vat_lbp"):
-            try: rates=self.client.exchange_rates()
-            except Exception: rates=[]
-            rates=self.sales_rates_for_date(rates,self.sales_date.get())
-            if hasattr(self,"sales_exchange"):
-                self.sales_exchange.config(text=self.exchange_equivalent_text(result["grand_total"],currency,rates))
-            lbp,_=self.exchange_equivalents(result["vat"],currency,rates) if result["vat"] else (0.0,None)
-            if hasattr(self,"sales_vat_lbp"):
-                self.sales_vat_lbp.config(text=f"VAT (LBP): {lbp:,.2f}" if lbp is not None else "VAT (LBP): rate unavailable")
 
     def sales_type_changed(self):
         self.calculate_sales_line(); self.update_sales_totals()
@@ -1255,6 +1270,15 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.sales_treatment.set(next((k for k,v in SALE_TREATMENTS.items() if v==(detail.get("vat_treatment") or "standard")),"Taxable 11%"))
         self.sales_amount_paid.set(str(detail.get("amount_paid") or 0)); self.sales_due_date.set(safe_display_date(detail.get("due_date")) if detail.get("due_date") else "")
         self.sales_doc_type.set({"credit_note":"Credit Note","debit_note":"Debit Note"}.get(detail.get("doc_subtype") or "invoice","Invoice"))
+        self.sales_revenue_caption.config(text="Discount Account" if self.sales_doc_type.get()=="Credit Note" else "Revenue Account")
+        revenue_code=str(detail.get("expense_account") or "")
+        if self.sales_doc_type.get()=="Credit Note":
+            category="Goods" if revenue_code.startswith("709") else "Products / Services"
+            self.sales_category_box["values"]=["Goods","Products / Services"]
+        else:
+            category="Goods" if revenue_code.startswith("701") else "Products" if revenue_code.startswith("711") else "Services"
+            self.sales_category_box["values"]=["Goods","Products","Services"]
+        self.sales_category.set(category)
         self.sales_discount_percent.set(f'{float(detail.get("invoice_discount_percent") or 0):g}'); self.sales_discount_amount.set(f'{float(detail.get("invoice_discount_amount") or 0):g}')
         for line in items or [{"description":"Invoice total","quantity":1,"unit_price":float(detail["subtotal"] or 0),"vat_rate":11}]:
             item={"item_code":line.get("item_code") or "","description":line["description"],"quantity":float(line["quantity"]),"unit":line.get("unit") or "",
@@ -1270,7 +1294,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         fields=(self.sales_no,self.sales_date,self.sales_party,self.sales_currency,self.sales_supplier_account,self.sales_vat_account,
                 self.sales_expense_account,self.sales_supplier_side,self.sales_vat_side,self.sales_expense_side,self.sales_payment_method,
                 self.sales_due_date,self.sales_amount_paid,self.sales_branch,self.sales_department,self.sales_project,self.sales_treatment,
-                self.sales_doc_type,self.sales_discount_percent,self.sales_discount_amount)
+                self.sales_doc_type,self.sales_category,self.sales_discount_percent,self.sales_discount_amount)
         lines=tuple((item.get("item_code"),item.get("description"),item.get("quantity"),item.get("unit"),
                      item.get("unit_price"),item.get("discount_percent"),item.get("vat_rate")) for item in self.sales_items)
         return tuple(field.get() for field in fields),lines
@@ -1284,7 +1308,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
                  "party_name":self.sales_party.get().strip(),"kind":"sales","currency":self.sales_currency.get(),
                  "supplier_account":self.sales_supplier_account.get().split(" - ",1)[0].strip(),
                  "vat_account":self.sales_vat_account.get().split(" - ",1)[0].strip() or "4427",
-                 "expense_account":self.sales_expense_account.get().split(" - ",1)[0].strip() or "713100000",
+                 "expense_account":self.sales_expense_account.get().split(" - ",1)[0].strip() or self.default_sales_posting_account(),
                  "supplier_side":self.sales_supplier_side.get(),"vat_side":self.sales_vat_side.get(),"expense_side":self.sales_expense_side.get(),
                  "due_date":self.sales_due_date.get().strip(),"payment_method":self.sales_payment_method.get(),"amount_paid":self.sales_amount_paid.get().strip().replace(",","") or "0",
                  "branch":self.sales_branch.get(),"status":"posted" if post else "review","source_file":"Sales Invoice","source_row":None,
