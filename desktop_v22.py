@@ -17,11 +17,14 @@ class V22Mixin:
     def sales_doc_type_changed(self):
         if not self.sales_edit_id: self.refresh_sales_number()
         reverse=self.sales_doc_type.get()=="Credit Note"
-        account=self.sales_expense_account.get().split(" - ",1)[0].strip()
-        if reverse and not account.startswith(("709","719")):
-            self.sales_expense_account.set("709000001" if account.startswith("70") else "719000001")
-        elif not reverse and account in ("709000001","719000001"):
-            self.sales_expense_account.set("713100000")
+        if reverse:
+            self.sales_category_box["values"]=["Goods","Products / Services"]
+            if self.sales_category.get()!="Goods": self.sales_category.set("Products / Services")
+        else:
+            self.sales_category_box["values"]=["Goods","Products","Services"]
+            if self.sales_category.get()=="Products / Services": self.sales_category.set("Services")
+        self.sales_revenue_caption.config(text="Discount Account" if reverse else "Revenue Account")
+        self.sales_category_changed()
         self.sales_supplier_side.set("C - Credit" if reverse else "D - Debit")
         self.sales_vat_side.set("D - Debit" if reverse else "C - Credit")
         self.sales_expense_side.set("D - Debit" if reverse else "C - Credit")

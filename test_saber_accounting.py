@@ -389,9 +389,11 @@ class SaberAccountingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             db=Database(Path(folder)/"lebanese.db"); db.initialize("secret")
             accounts=db.list_accounts()
-            self.assertEqual(len(accounts),len(LEBANESE_ACCOUNTS)+3+13)  # includes 709 and 719 credit-note posting accounts
+            self.assertEqual(len(accounts),len(LEBANESE_ACCOUNTS)+3+19)  # includes sale and credit-note posting accounts
             codes={row["code"] for row in accounts}
-            self.assertTrue({"1","2","3","4","5","6","7","4011","4111","4426.6","4427","6011","713","709000001","719000001"}.issubset(codes))
+            self.assertTrue({"1","2","3","4","5","6","7","4011","4111","4426.6","4427","6011","713",
+                             "7011","701100001","711100001","7130","713000001","709000001","7190","719000001"}.issubset(codes))
+            self.assertEqual(next(row["parent_code"] for row in accounts if row["code"]=="719000001"),"7190")
             self.assertFalse({"1100","2100","2200","1300","4100","5100","9999"} & codes)
             user=db.user_for_token(db.login("admin","secret")["token"])
             purchase={"invoice_number":"LB-P","invoice_date":"21-09-2026","party_name":"Supplier",

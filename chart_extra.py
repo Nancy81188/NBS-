@@ -1,6 +1,12 @@
 """Accounts the company asked for (created automatically when missing) and the default posting accounts."""
 
 EXTRA_ACCOUNTS = [
+    ("7011", "Sales of Goods", "income"),
+    ("701100001", "Goods Sales", "income"),
+    ("711100001", "Finished Products Sales", "income"),
+    ("7130", "Sales of Services", "income"),
+    ("713000001", "Services Revenue", "income"),
+    ("7190", "Sales Discounts - Products and Services", "income"),
     ("709000001", "Sales Credits - Goods Returns and Discounts", "income"),
     ("719000001", "Sales Credits - Services and Production Discounts", "income"),
     ("44210", "VAT on Purchases - Deductible", "asset"), ("44211", "VAT on Export-related Purchases - Recoverable", "asset"),
@@ -21,7 +27,10 @@ OLD_PAYROLL_MAP = {"salary": "621100001", "transport": "621100003", "overtime": 
 
 def ensure_accounts(db):
     for code, name, kind in EXTRA_ACCOUNTS:
-        if db.execute("SELECT 1 FROM accounts WHERE code=?", (code,)).fetchone(): continue
+        if db.execute("SELECT 1 FROM accounts WHERE code=?", (code,)).fetchone():
+            if code == "719000001":
+                db.execute("UPDATE accounts SET parent_id=(SELECT id FROM accounts WHERE code='7190') WHERE code=?", (code,))
+            continue
         parent = None
         for size in range(len(code) - 1, 0, -1):
             parent = db.execute("SELECT id FROM accounts WHERE code=?", (code[:size],)).fetchone()
