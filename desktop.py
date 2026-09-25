@@ -134,6 +134,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         style.configure("Treeview.Heading", background=NAVY, foreground="white", font=("Segoe UI", 9, "bold"))
         style.map("Treeview.Heading", background=[("active", NAVY)])
         style.configure("TCombobox", padding=5)
+        style.configure("Sales.Treeview", rowheight=26, font=("Segoe UI", 9))
 
     def clear(self):
         for child in self.winfo_children(): child.destroy()
@@ -826,8 +827,8 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
 
     def build_sales_invoice(self):
         self.sales_items=[]; self.sales_edit_id=None
-        header=tk.LabelFrame(self.sales_tab,text="Sales Invoice",bg=LIGHT,padx=10,pady=8)
-        header.pack(fill="x",padx=10,pady=(10,4))
+        header=tk.LabelFrame(self.sales_tab,text="Sales Invoice",bg=LIGHT,padx=8,pady=4)
+        header.pack(fill="x",padx=10,pady=(4,2))
         self.sales_no=tk.StringVar(); self.sales_date=tk.StringVar(value=datetime.now().strftime("%d-%m-%Y"))
         self.sales_party=tk.StringVar(); self.sales_kind=tk.StringVar(value="sales"); self.sales_currency=tk.StringVar(value="USD")
         self.sales_supplier_account=tk.StringVar(value="")
@@ -848,75 +849,74 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         ttk.Combobox(top,textvariable=self.sales_currency,values=["USD","EUR","LBP","AED"],state="readonly",width=6).pack(side="left",padx=(4,12))
         self.sales_mode_label=tk.Label(top,text="NEW INVOICE",bg=GOLD,fg=NAVY,font=("Segoe UI",8,"bold"),padx=8); self.sales_mode_label.pack(side="left",padx=6)
         account_fields=[("Client Account",self.sales_supplier_account,self.sales_supplier_side),("VAT Account",self.sales_vat_account,self.sales_vat_side),("Revenue Account",self.sales_expense_account,self.sales_expense_side)]
-        accounts=tk.Frame(header,bg=LIGHT); accounts.grid(row=1,column=0,columnspan=8,sticky="w",pady=(8,0))
+        accounts=tk.Frame(header,bg=LIGHT); accounts.grid(row=1,column=0,columnspan=8,sticky="w",pady=(3,0))
         for label,var,side in account_fields:
             tk.Label(accounts,text=label,bg=LIGHT).pack(side="left",padx=(0,4))
             self.account_search_box(accounts,var,12).pack(side="left")
             side_box=ttk.Combobox(accounts,textvariable=side,values=["D - Debit","C - Credit"],state="readonly",width=9); side_box.pack(side="left",padx=(3,10))
             side_box.bind("<<ComboboxSelected>>",lambda _event:self.update_sales_totals())
-        payment=tk.Frame(header,bg=LIGHT); payment.grid(row=2,column=0,columnspan=8,sticky="w",pady=(8,0))
+        payment=tk.Frame(header,bg=LIGHT); payment.grid(row=2,column=0,columnspan=8,sticky="w",pady=(3,0))
         tk.Label(payment,text="Payment Mode",bg=LIGHT).pack(side="left")
         ttk.Combobox(payment,textvariable=self.sales_payment_method,values=["On Account (Not Cash)","Cash","Bank Transfer","Cheque","Card","Other"],state="readonly",width=20).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Due Date",bg=LIGHT).pack(side="left"); self.date_entry(payment,self.sales_due_date,12).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Amount Paid",bg=LIGHT).pack(side="left"); tk.Entry(payment,textvariable=self.sales_amount_paid,width=12).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Branch",bg=LIGHT).pack(side="left"); self.branch_selector(payment,self.sales_branch,16,False).pack(side="left",padx=(4,10))
-        dims=tk.Frame(header,bg=LIGHT); dims.grid(row=4,column=0,columnspan=8,sticky="w",pady=(6,0))
+        dims=tk.Frame(header,bg=LIGHT); dims.grid(row=3,column=0,columnspan=8,sticky="w",pady=(3,0))
         self.sales_department=tk.StringVar(); self.sales_project=tk.StringVar(); self.dimension_selectors(dims,self.sales_department,self.sales_project)
         self.sales_treatment=tk.StringVar(value="Taxable 11%")
         tk.Label(dims,text="VAT Treatment",bg=LIGHT,font=("Segoe UI",9,"bold")).pack(side="left",padx=(6,4))
         treatment_box=ttk.Combobox(dims,textvariable=self.sales_treatment,values=list(SALE_TREATMENTS),state="readonly",width=19); treatment_box.pack(side="left")
         treatment_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_treatment_changed())
+        self.sales_exchange=tk.Label(dims,text="",bg=LIGHT,fg="#5f6b76",anchor="w"); self.sales_exchange.pack(side="left",padx=(12,0))
         self.sales_payment_method.trace_add("write",lambda *_args:self.sales_payment_changed())
-        self.sales_exchange=tk.Label(header,text="",bg=LIGHT,fg="#5f6b76",anchor="w"); self.sales_exchange.grid(row=3,column=0,columnspan=8,sticky="w",pady=(6,0))
         self.sales_currency.trace_add("write",lambda *_args:self.update_sales_totals())
         self.sales_date.trace_add("write",lambda *_args:self.sales_date_changed())
 
         self.sales_doc_type=tk.StringVar(value="Invoice"); self.sales_discount_percent=tk.StringVar(value="0"); self.sales_discount_amount=tk.StringVar(value="0")
-        toolbar=tk.Frame(self.sales_tab,bg=LIGHT); toolbar.pack(fill="x",padx=10,pady=(6,0))
+        toolbar=tk.Frame(self.sales_tab,bg=LIGHT); toolbar.pack(fill="x",padx=10,pady=(2,0))
         doc_box=ttk.Combobox(toolbar,textvariable=self.sales_doc_type,values=["Invoice","Debit Note","Credit Note"],state="readonly",width=11); doc_box.pack(side="left",padx=(0,6))
         doc_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_doc_type_changed())
         self.action_button(toolbar,"New",self.new_sales_invoice).pack(side="left",padx=2)
         self.action_button(toolbar,"Add Line",self.add_sales_item).pack(side="left",padx=2)
-        tk.Button(toolbar,text="Delete Line",command=self.remove_sales_item,bg="#8B1E1E",fg="white",border=0,padx=10,pady=7).pack(side="left",padx=2)
-        tk.Button(toolbar,text="Save",command=lambda:self.save_sales_invoice(False),bg=NAVY,fg="white",font=("Segoe UI",10,"bold"),border=0,padx=14,pady=7).pack(side="left",padx=(8,2))
-        tk.Button(toolbar,text="Save & Post",command=lambda:self.save_sales_invoice(True),bg=GOLD,fg=NAVY,font=("Segoe UI",10,"bold"),border=0,padx=14,pady=7).pack(side="left",padx=2)
+        tk.Button(toolbar,text="Delete Line",command=self.remove_sales_item,bg="#8B1E1E",fg="white",border=0,padx=10,pady=4).pack(side="left",padx=2)
+        tk.Button(toolbar,text="Save",command=lambda:self.save_sales_invoice(False),bg=NAVY,fg="white",font=("Segoe UI",10,"bold"),border=0,padx=14,pady=4).pack(side="left",padx=(8,2))
+        tk.Button(toolbar,text="Save & Post",command=lambda:self.save_sales_invoice(True),bg=GOLD,fg=NAVY,font=("Segoe UI",10,"bold"),border=0,padx=14,pady=4).pack(side="left",padx=2)
         self.action_button(toolbar,"Duplicate",self.duplicate_sales_invoice).pack(side="left",padx=(8,2))
         tk.Label(toolbar,text="Find No.",bg=LIGHT).pack(side="left",padx=(8,2))
         self.sales_open_box=ttk.Combobox(toolbar,textvariable=self.sales_open_choice,width=20); self.sales_open_box.pack(side="left")
         self.sales_open_box.bind("<<ComboboxSelected>>",lambda _event:self.open_sales_invoice()); self.sales_open_box.bind("<KeyRelease>",self.search_open_sales)
         self.sales_open_box.bind("<Return>",lambda _event:self.open_sales_by_number())
-        toolbar2=tk.Frame(self.sales_tab,bg=LIGHT); toolbar2.pack(fill="x",padx=10,pady=(4,0))
+        toolbar2=tk.Frame(self.sales_tab,bg=LIGHT); toolbar2.pack(fill="x",padx=10,pady=(2,0))
         for text,command in (("Print Preview",lambda:self.sales_invoice_pdf("preview")),("PDF",lambda:self.sales_invoice_pdf("pdf")),("Print",lambda:self.sales_invoice_pdf("print")),
                              ("Excel",lambda:self.sales_entry_report("xlsx"))):
-            tk.Button(toolbar2,text=text,command=command,bg=NAVY,fg="white",border=0,padx=10,pady=6).pack(side="left",padx=2)
+            tk.Button(toolbar2,text=text,command=command,bg=NAVY,fg="white",border=0,padx=10,pady=4).pack(side="left",padx=2)
         for text,command in (("Import Excel",self.import_sales_excel),("Import PDF",self.import_sales_pdf),("Excel Template",lambda:self.save_invoice_template("sales"))):
-            tk.Button(toolbar2,text=text,command=command,bg=GOLD,fg=NAVY,border=0,padx=10,pady=6).pack(side="left",padx=(8 if text=="Import Excel" else 2,2))
-        totals=tk.Frame(self.sales_tab,bg=LIGHT); totals.pack(side="bottom",fill="x",padx=10,pady=(2,6))
-        self.sales_words=tk.Label(totals,text="",bg=LIGHT,fg="#5f6b76",anchor="w",justify="left",wraplength=560); self.sales_words.pack(side="left",fill="x",expand=True,padx=4)
+            tk.Button(toolbar2,text=text,command=command,bg=GOLD,fg=NAVY,border=0,padx=10,pady=4).pack(side="left",padx=(8 if text=="Import Excel" else 2,2))
+        totals=tk.Frame(self.sales_tab,bg=LIGHT); totals.pack(side="bottom",fill="x",padx=10,pady=(2,4))
+        self.sales_words=tk.Label(totals,text="",bg=LIGHT,fg="#5f6b76",anchor="w",justify="left",wraplength=400); self.sales_words.pack(side="left",fill="x",expand=True,padx=4)
         box=tk.Frame(totals,bg="#dfe6ee",padx=8,pady=4); box.pack(side="right")
-        discount=tk.Frame(box,bg="#dfe6ee"); discount.grid(row=1,column=0,sticky="e")
+        discount=tk.Frame(box,bg="#dfe6ee"); discount.grid(row=1,column=4,columnspan=2,sticky="e",padx=6)
         tk.Label(discount,text="Discount %",bg="#dfe6ee").pack(side="left"); e1=tk.Entry(discount,textvariable=self.sales_discount_percent,width=5); e1.pack(side="left",padx=2)
         tk.Label(discount,text="or amount",bg="#dfe6ee").pack(side="left"); e2=tk.Entry(discount,textvariable=self.sales_discount_amount,width=9); e2.pack(side="left",padx=2)
         for entry in (e1,e2): entry.bind("<KeyRelease>",lambda _event:self.update_sales_totals())
         self.sales_total_labels={}
-        for row,(key,caption) in enumerate((("Total","Total"),("Discount",""),("Total HT","Total HT (before VAT)"),("VAT","VAT 11%"),("TOTAL","TOTAL"))):
-            if caption:
-                label=tk.Label(box,text=caption,bg="#dfe6ee",font=("Segoe UI",9,"bold" if key in ("Total HT","TOTAL") else "normal"))
-                label.grid(row=row,column=0,sticky="e",padx=4)
-                if key=="VAT": self.sales_vat_caption=label
-            value=tk.Label(box,text="0.00",bg="#dfe6ee",width=16,anchor="e",font=("Segoe UI",10 if key=="TOTAL" else 9,"bold" if key in ("Total HT","TOTAL") else "normal"))
-            value.grid(row=row,column=1,sticky="e"); self.sales_total_labels[key]=value
+        for key,caption,row,column in (("Total","Total",0,0),("Discount","Discount",0,2),
+                                       ("Total HT","Total HT",0,4),("VAT","VAT 11%",1,0),("TOTAL","TOTAL",1,2)):
+            label=tk.Label(box,text=caption,bg="#dfe6ee",font=("Segoe UI",9,"bold" if key in ("Total HT","TOTAL") else "normal"))
+            label.grid(row=row,column=column,sticky="e",padx=(8,3))
+            if key=="VAT": self.sales_vat_caption=label
+            value=tk.Label(box,text="0.00",bg="#dfe6ee",width=11,anchor="e",font=("Segoe UI",10 if key=="TOTAL" else 9,"bold" if key in ("Total HT","TOTAL") else "normal"))
+            value.grid(row=row,column=column+1,sticky="e",padx=(0,4)); self.sales_total_labels[key]=value
         self.sales_totals=tk.Label(totals,text="",bg=LIGHT,fg=NAVY); self.sales_totals.pack(side="right",padx=8)
-        sheet_frame=tk.Frame(self.sales_tab,bg=LIGHT); sheet_frame.pack(fill="both",expand=True,padx=10,pady=6)
+        sheet_frame=tk.Frame(self.sales_tab,bg=LIGHT); sheet_frame.pack(fill="both",expand=True,padx=10,pady=(2,3))
         self.sales_columns=[("item_code","Item",90),("description","Description",250),("quantity","Qty",55),("unit","Unit",60),("unit_price","Unit Price",95),
             ("gross_amount","Total Amount",105),("discount_percent","Discount %",80),("vat_rate","VAT %",60),("total","Net",105)]
-        self.sales_sheet=ttk.Treeview(sheet_frame,columns=[c[0] for c in self.sales_columns],show="headings",height=9)
+        self.sales_sheet=ttk.Treeview(sheet_frame,columns=[c[0] for c in self.sales_columns],show="headings",height=8,style="Sales.Treeview")
         for key,label,width in self.sales_columns: self.sales_sheet.heading(key,text=label); self.sales_sheet.column(key,width=width,anchor="w" if key=="description" else "e")
         scroll=ttk.Scrollbar(sheet_frame,orient="vertical",command=self.sales_sheet.yview); self.sales_sheet.configure(yscrollcommand=scroll.set)
         self.sales_sheet.pack(side="left",fill="both",expand=True); scroll.pack(side="right",fill="y")
         self.sales_sheet.bind("<Double-1>",self.edit_sales_cell); self.sales_sheet.bind("<Return>",self.edit_sales_cell)
         self.sales_sheet.bind("<Delete>",lambda _event:self.remove_sales_item())
-        tk.Label(self.sales_tab,text="Item: optional stock code (name, unit and price fill in; the stock is issued on saving). Double-click a cell to type; Tab / Enter moves on. Zero-rated / exempt: choose the VAT Treatment.",bg=LIGHT,fg="#5f6b76").pack(anchor="w",padx=12)
         self.new_sales_invoice(confirm=False)
 
     # ---- sales invoice helpers
