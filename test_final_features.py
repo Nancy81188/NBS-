@@ -710,9 +710,12 @@ class Version22Test(unittest.TestCase):
         invoice = self.db.create_manual_invoice({"invoice_date": "10-02-2026", "party_name": "Client A", "kind": "sales", "currency": "USD", "status": "posted"}, calc["lines"], self.user)
         note = invoice_calc.calculate([{"description": "Return", "quantity": 1, "unit_price": 100}])
         credit = self.db.create_manual_invoice({"invoice_date": "12-02-2026", "party_name": "Client A", "kind": "sales", "currency": "USD", "status": "posted", "doc_subtype": "credit_note",
-            "invoice_number": self.db.next_invoice_number("credit_note", "12-02-2026"), "supplier_side": "C - Credit", "vat_side": "D - Debit", "expense_side": "D - Debit"}, note["lines"], self.user)
+            "invoice_number": self.db.next_invoice_number("credit_note", "12-02-2026"), "supplier_side": "C - Credit", "vat_side": "D - Debit", "expense_side": "D - Debit",
+            "expense_account": "719000001"}, note["lines"], self.user)
         rows = {r["id"]: r for r in self.db.list_invoices()}
         self.assertEqual((rows[credit]["invoice_number"], rows[credit]["doc_subtype"]), ("CN-2026-000001", "credit_note"))
+        self.assertEqual(rows[credit]["expense_account"],"719000001")
+        self.assertIn("709000001",{account["code"] for account in self.db.list_accounts()})
         credit_lines = {row["account_code"]: (float(row["debit"]),float(row["credit"])) for row in self.db.journal() if row["source_id"]==credit}
         self.assertEqual(credit_lines[rows[credit]["supplier_account"]], (0,111))
         self.assertEqual(credit_lines[rows[credit]["expense_account"]], (100,0))

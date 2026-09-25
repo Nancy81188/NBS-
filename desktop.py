@@ -860,6 +860,11 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
             self.account_search_box(row,var,28).pack(side="left",padx=(0,12))
             side_box=ttk.Combobox(row,textvariable=side,values=["D - Debit","C - Credit"],state="readonly",width=11); side_box.pack(side="left",padx=(3,10))
             side_box.bind("<<ComboboxSelected>>",lambda _event:self.update_sales_totals())
+        credit_accounts=tk.Frame(account_details,bg=LIGHT); credit_accounts.pack(anchor="w",pady=(3,2))
+        tk.Label(credit_accounts,text="Credit Note account:",bg=LIGHT).pack(side="left",padx=(6,6))
+        for label,code in (("Goods (709)","709000001"),("Services / production (719)","719000001")):
+            tk.Button(credit_accounts,text=label,command=lambda account=code:self.choose_sales_credit_account(account),
+                      bg="#dfe6ee",fg=NAVY,border=0,padx=9,pady=3).pack(side="left",padx=(0,5))
         payment=tk.Frame(invoice_details,bg=LIGHT); payment.pack(anchor="w",fill="x",pady=(3,0))
         tk.Label(payment,text="Payment Mode",bg=LIGHT).pack(side="left")
         ttk.Combobox(payment,textvariable=self.sales_payment_method,values=["On Account (Not Cash)","Cash","Bank Transfer","Cheque","Card","Other"],state="readonly",width=20).pack(side="left",padx=(4,12))
@@ -880,7 +885,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
 
         self.sales_doc_type=tk.StringVar(value="Invoice"); self.sales_discount_percent=tk.StringVar(value="0"); self.sales_discount_amount=tk.StringVar(value="0")
         toolbar=tk.Frame(self.sales_tab,bg=LIGHT); toolbar.pack(fill="x",padx=10,pady=(2,0))
-        doc_box=ttk.Combobox(toolbar,textvariable=self.sales_doc_type,values=["Invoice","Debit Note","Credit Note"],state="readonly",width=11); doc_box.pack(side="left",padx=(0,6))
+        doc_box=ttk.Combobox(toolbar,textvariable=self.sales_doc_type,values=["Invoice","Credit Note"],state="readonly",width=11); doc_box.pack(side="left",padx=(0,6))
         doc_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_doc_type_changed())
         self.action_button(toolbar,"New",self.new_sales_invoice).pack(side="left",padx=2)
         self.action_button(toolbar,"Add Line",self.add_sales_item).pack(side="left",padx=2)
@@ -997,6 +1002,12 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         if party:
             self.sales_supplier_account.set(party.get("account_number") or "")
             if party.get("currency"): self.sales_currency.set(party["currency"])
+
+    def choose_sales_credit_account(self,code):
+        if self.sales_doc_type.get()!="Credit Note":
+            self.sales_doc_type.set("Credit Note")
+            self.sales_doc_type_changed()
+        self.sales_expense_account.set(code)
 
     def sales_account_chosen(self):
         code=self.sales_supplier_account.get().split(" - ",1)[0].strip()
