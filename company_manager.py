@@ -58,6 +58,8 @@ class CompanyManager:
         path=str(Path(selected["database"]).resolve())
         if path not in self._cache:
             database=Database(path)
+            safe="".join(ch for ch in company["name"] if ch.isalnum() or ch in " -_&.").strip() or company["id"]
+            database.backup_folder=str(self.master_path.parent/"backups"/safe/str(selected["year"])); database.backup_label=f'{safe}_{selected["year"]}'
             # Bring files made by an older version up to date (new tables and columns); existing data is kept.
             if Path(path).exists() and Path(path)!=self.master_path: database.initialize(secrets.token_urlsafe(24))
             self._cache[path]=database
@@ -107,6 +109,31 @@ class CompanyManager:
         inventory.carry_forward(source,target,year,user_id)
         company["years"].append({"year":year,"database":str(path.resolve()),"status":"open"}); company["years"].sort(key=lambda y:int(y["year"]))
         self._write(data); return company
+
+    def delete_year(self,company_id,year,user_id):
+        """Remove the LAST fiscal year of a company (for example to redo the opening). The file is kept as a backup
+        in the company's 'deleted_years' folder, and the previous year is reopened (its closing is removed)."""
+        import shutil
+        from datetime import datetime as _dt
+        year=int(year); data=self._read(); company=next((c for c in data["companies"] if c["id"]==company_id),None)
+        if not company: raise KeyError("Company not found")
+        years=sorted(company.get("years",[]),key=lambda y:int(y["year"]))
+        current=next((y for y in years if int(y["year"])==year),None)
+        if not current: raise ValueError(f"Fiscal year {year} was not found for this company")
+        if int(years[-1]["year"])!=year: raise ValueError(f"Only the last fiscal year can be deleted ({years[-1]['year']}). Delete the later years first.")
+        if len(years)==1: raise ValueError("The only fiscal year of a company cannot be deleted")
+        path=Path(current["database"]).resolve()
+        if path==self.master_path.resolve(): raise ValueError("This year uses the main database file and cannot be deleted")
+        backup_folder=self.root/company_id/"deleted_years"; backup_folder.mkdir(parents=True,exist_ok=True)
+        backup=backup_folder/f"{year}_deleted_{_dt.now():%Y%m%d_%H%M%S}.db"
+        self._cache.pop(str(path),None)
+        if path.exists(): shutil.move(str(path),str(backup))
+        company["years"]=[y for y in company["years"] if int(y["year"])!=year]
+        previous=years[-2]
+        self._write(data)
+        reopened=self.reopen_year(company_id,int(previous["year"]),user_id)
+        return {"deleted_year":year,"backup":str(backup),"reopened_year":int(previous["year"]),"removed_closing_entries":reopened.get("removed_closing_entries",0),
+                "company":reopened["company"]}
 
     def reopen_year(self,company_id,year,user_id):
         year=int(year); data=self._read(); company=next((c for c in data["companies"] if c["id"]==company_id),None)

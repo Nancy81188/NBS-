@@ -224,3 +224,12 @@ F2 opens the list that fits the field: items in item fields, customers / supplie
 - Account From / To: search by number or name among all accounts (parents too); the account name shows beside each box (like BRAINS). "Same as From" copies the account.
 - The options are in their own "Options" tab; every Show opens its own full-page tab with Print Preview, Print, Excel, PDF and Close Tab. Several statements can stay open side by side.
 - Double-click a statement line to see the transaction (all its lines) and "Open in its screen" (journal voucher, sales invoice, purchase, receipt / payment, expense). In the Trial Balance, double-click an account to open its statement in a new tab.
+
+# Version 2.4.0
+- Profit & Loss > "Delete Year" (administrators): deletes the last fiscal year of a company (for example 2025, to redo the opening). A backup copy of the file is kept in `companies/<company>/deleted_years`, and the previous year is reopened with its closing removed. Type "DELETE <year>" to confirm. Then close the previous year again to make a new opening.
+- NSSF statement: sickness & maternity shown as employee 3% + employer 8% = total 11% (as in the NSSF declaration).
+
+# Version 2.5.0 - Backups per company and per year
+- A backup is made only when you press "Create Backup Now" (and automatically before a restore or an import that replaces data, marked "safety"). Nothing is backed up when the program is opened.
+- Each company and each fiscal year has its own folder and file name: `SaberAccounting\backups\<Company>\<Year>\<Company>_<Year>_<date>_<time>.db`.
+- Security / Backup / Rates > Backup & Restore shows the backups of the company and year you are in, with "Save Backup As..." (copy to a USB key or a drive folder) and "Open Backup Folder". Backups made by older versions still appear and can be restored.

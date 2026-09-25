@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tkinter as tk
 import sys
 import traceback
@@ -1630,6 +1631,8 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         tk.Button(closing,text=f"Close {year} & Open {year+1}",command=self.close_fiscal_year,bg="#8B1E1E",fg="white",border=0,padx=14,pady=7,font=("Segoe UI",9,"bold")).pack(side="left",padx=4)
         tk.Button(closing,text="Delete Closing & Reopen Year",command=self.reopen_fiscal_year,bg=NAVY,fg="white",border=0,padx=12,pady=7).pack(side="left",padx=4)
         tk.Button(closing,text=f"Refresh Opening of {year+1}",command=self.refresh_next_year_opening,bg=NAVY,fg="white",border=0,padx=12,pady=7).pack(side="left",padx=4)
+        if (self.current_user or {}).get("role")=="admin":
+            tk.Button(closing,text=f"Delete Year {year}",command=self.delete_fiscal_year,bg="#5a0f0f",fg="white",border=0,padx=10,pady=7).pack(side="left",padx=4)
         tk.Label(closing,text="1 Journal Voucher per currency; result to 121 / 125",bg=LIGHT,fg="#5f6b76",wraplength=190,justify="left").pack(side="left",padx=6)
         actions=tk.Frame(self.pnl_tab,bg=LIGHT); actions.pack(side="bottom",pady=(0,8))
         self.pnl_tree=self.table(self.pnl_tab,[("currency","Currency",85),("type","Type",90),("account","Account",100),
@@ -1646,6 +1649,18 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         record=next((y for y in (getattr(self,"current_company",{}) or {}).get("years",[]) if int(y["year"])==int(year or 0)),{})
         closed=record.get("status")=="closed"
         self.fiscal_status.config(text="CLOSED (read-only) - the P&L is shown before the closing voucher" if closed else "Open",fg="#8B1E1E" if closed else NAVY)
+
+    def delete_fiscal_year(self):
+        from tkinter import simpledialog
+        year=int(getattr(self,"current_fiscal_year",0))
+        answer=simpledialog.askstring("Delete Fiscal Year",f"This deletes ALL the data of {year} for {self.current_company['name']}\n(a backup copy of the file is kept),\n"
+            f"and reopens {year-1} so you can close it again.\n\nType DELETE {year} to confirm:",parent=self)
+        if (answer or "").strip().upper()!=f"DELETE {year}": return messagebox.showinfo("Delete Fiscal Year","Nothing was deleted")
+        try: result=self.client.delete_fiscal_year(year)
+        except Exception as exc: return messagebox.showerror("Delete Fiscal Year",str(exc))
+        self.current_company=result["company"]
+        messagebox.showinfo("Delete Fiscal Year",f"{year} deleted. Backup: {result['backup']}\n{result['reopened_year']} is open again (closing removed).\n\nOpen {result['reopened_year']} and close it again to make a new opening.")
+        self.company_selection_screen()
 
     def preview_closing(self):
         year=int(self.close_year.get())
@@ -1879,9 +1894,14 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         nested.add(users,text="Users & Permissions"); nested.add(backups,text="Backup & Restore"); nested.add(rates,text="Exchange Rates"); nested.add(branches,text="Branches"); nested.add(general,text="General Settings"); self.build_dimensions_pages(nested)
         self.build_users_page(users)
         backup_controls=tk.Frame(backups,bg=LIGHT); backup_controls.pack(fill="x",padx=10,pady=10)
-        self.action_button(backup_controls,"Create Backup Now",self.create_backup).pack(side="left",padx=4)
+        self.backup_scope=tk.Label(backups,text="",bg=LIGHT,fg=NAVY,font=("Segoe UI",10,"bold"),anchor="w"); self.backup_scope.pack(fill="x",padx=14,before=backup_controls)
+        tk.Button(backup_controls,text="Create Backup Now",command=self.create_backup,bg=GOLD,fg=NAVY,border=0,padx=15,pady=7,font=("Segoe UI",9,"bold")).pack(side="left",padx=4)
+        self.action_button(backup_controls,"Save Backup As... (USB / Drive)",self.save_backup_as).pack(side="left",padx=4)
+        self.action_button(backup_controls,"Open Backup Folder",self.open_backup_folder).pack(side="left",padx=4)
         tk.Button(backup_controls,text="Restore Selected",command=self.restore_selected_backup,bg="#8B1E1E",fg="white",border=0,padx=15,pady=7).pack(side="left",padx=4)
-        self.backups_tree=self.table(backups,[("name","Backup File",360),("size","Size",120),("modified","Created",180)])
+        tk.Label(backups,text="Each company and each fiscal year has its own backups. A backup is made only when you press 'Create Backup Now' "
+                 "(and automatically before a restore or an import that replaces data - marked 'safety').",bg=LIGHT,fg="#5f6b76",wraplength=1050,justify="left").pack(fill="x",padx=14)
+        self.backups_tree=self.table(backups,[("name","Backup File",430),("kind","Type",100),("size","Size",100),("modified","Created",170)])
         rate_controls=tk.Frame(rates,bg=LIGHT); rate_controls.pack(fill="x",padx=10,pady=10)
         self.rate_date=tk.StringVar(value=datetime.now().strftime("%d-%m-%Y")); self.rate_date_to=tk.StringVar(value=datetime.now().strftime("%d-%m-%Y")); self.rate_from=tk.StringVar(value="USD"); self.rate_to=tk.StringVar(value="LBP"); self.rate_value=tk.StringVar(value="1")
         tk.Label(rate_controls,text="Date From",bg=LIGHT).pack(side="left"); self.date_entry(rate_controls,self.rate_date,12).pack(side="left",padx=4)
@@ -1902,8 +1922,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.company_fields={key:tk.StringVar() for key in ("company_name","company_address","company_phone","company_mof","company_nssf","company_email","company_website","company_logo")}
         tk.Label(general,text="Base Currency",bg=LIGHT).grid(row=0,column=0,padx=14,pady=14,sticky="w")
         ttk.Combobox(general,textvariable=self.base_currency,values=["USD","EUR","LBP","AED"],state="readonly",width=15).grid(row=0,column=1,padx=14,pady=14)
-        tk.Label(general,text="Automatic backup every (hours)",bg=LIGHT).grid(row=1,column=0,padx=14,pady=14,sticky="w")
-        tk.Entry(general,textvariable=self.backup_hours,width=18).grid(row=1,column=1,padx=14,pady=14)
+
         for row,(key,label) in enumerate((("company_name","Company Name"),("company_address","Address"),("company_phone","Phone"),("company_mof","MOF / VAT Number"),("company_nssf","NSSF Employer Number"),("company_email","Email"),("company_website","Website"),("company_logo","Logo File Path")),2):
             tk.Label(general,text=label,bg=LIGHT).grid(row=row,column=0,padx=14,pady=7,sticky="w")
             tk.Entry(general,textvariable=self.company_fields[key],width=42).grid(row=row,column=1,padx=14,pady=7,sticky="w")
@@ -1928,7 +1947,8 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
             users=[]; backups=[]
         self.users_tree.delete(*self.users_tree.get_children()); self.backups_tree.delete(*self.backups_tree.get_children())
         self.fill_users_tree(users)
-        for row in backups: self.backups_tree.insert("","end",iid=row["name"],values=(row["name"],f'{row["size"]/1024/1024:,.2f} MB',row["modified"][:19]))
+        for row in backups: self.backups_tree.insert("","end",iid=row["name"],values=(row["name"],row.get("kind","backup"),f'{row["size"]/1024/1024:,.2f} MB',row["modified"][:19].replace("T"," ")))
+        if hasattr(self,"backup_scope"): self.backup_scope.config(text=f'Backups of {getattr(self,"current_company",{}).get("name","")} - fiscal year {getattr(self,"current_fiscal_year","")}')
 
     def save_branch(self):
         try: branch=self.client.save_branch(self.new_branch_name.get().strip())
@@ -1939,6 +1959,28 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         try: result=self.client.create_backup()
         except Exception as exc: return messagebox.showerror("Backup",str(exc))
         self.load_settings_pages(); messagebox.showinfo("Backup",f'Backup created:\n{result["path"]}')
+
+    def save_backup_as(self):
+        selected=self.backups_tree.selection()
+        if not selected:
+            if not messagebox.askyesno("Save Backup As","No backup is selected. Create a new backup now and save a copy?"): return
+            try: name=Path(self.client.create_backup()["path"]).name
+            except Exception as exc: return messagebox.showerror("Backup",str(exc))
+            self.load_settings_pages()
+        else: name=selected[0]
+        path=filedialog.asksaveasfilename(initialfile=name,defaultextension=".db",filetypes=[("Saber backup","*.db")])
+        if not path: return
+        try: Path(path).write_bytes(self.client.download_backup(name)["content"])
+        except Exception as exc: return messagebox.showerror("Save Backup As",str(exc))
+        messagebox.showinfo("Save Backup As",f"Backup copied to:\n{path}")
+
+    def open_backup_folder(self):
+        try: folder=self.client.backup_folder(); Path(folder).mkdir(parents=True,exist_ok=True)
+        except Exception as exc: return messagebox.showerror("Backups",str(exc))
+        try:
+            if os.name=="nt": os.startfile(folder)
+            else: raise RuntimeError
+        except Exception: messagebox.showinfo("Backups",f"Backup folder:\n{folder}")
 
     def restore_selected_backup(self):
         selected=self.backups_tree.selection()

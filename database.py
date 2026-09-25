@@ -626,12 +626,21 @@ class Database:
             except (TypeError, ValueError): pass
         return f"{prefix}-{year}-{sequence:06d}"
 
-    def backup(self):
-        """Consistent online copy using SQLite's backup API (safe while other users are writing)."""
+    backup_folder = None   # set by CompanyManager: backups/<company>/<year>
+    backup_label = None    # "<company>_<year>"
+
+    def _backups_dir(self):
+        return Path(self.backup_folder) if self.backup_folder else Path(self.path).parent / "backups"
+
+    def backup(self, kind="backup"):
+        """Consistent copy of this company-year file (SQLite backup API, safe while others are writing).
+        Stored in backups/<company>/<year>/<company>_<year>_<date>_<time>.db"""
         source = Path(self.path)
         if not source.exists(): return None
-        folder = source.parent / "backups"; folder.mkdir(parents=True, exist_ok=True)
-        target = folder / f"saber_accounting_{datetime.now():%Y%m%d_%H%M%S_%f}.db"
+        folder = self._backups_dir(); folder.mkdir(parents=True, exist_ok=True)
+        label = self.backup_label or "saber_accounting"
+        target = folder / f"{label}_{datetime.now():%Y-%m-%d_%H%M%S}{'_' + kind if kind != 'backup' else ''}.db"
+        if target.exists(): target = folder / f"{target.stem}_{datetime.now():%f}.db"
         source_connection = sqlite3.connect(str(source)); target_connection = sqlite3.connect(str(target))
         try: source_connection.backup(target_connection)
         finally: target_connection.close(); source_connection.close()
@@ -648,17 +657,31 @@ class Database:
         except sqlite3.DatabaseError as exc: raise ValueError("Selected file is not a valid Saber Accounting backup") from exc
         if not {"accounts","journal_entries","invoices"}.issubset(tables): raise ValueError("Selected file is not a Saber Accounting backup")
 
+    def _backup_files(self):
+        folders=[self._backups_dir()]
+        legacy=Path(self.path).parent/"backups"
+        if legacy.resolve()!=folders[0].resolve(): folders.append(legacy)
+        files={}
+        for index,folder in enumerate(folders):
+            if not folder.exists(): continue
+            for path in folder.glob("*.db" if index==0 else "saber_accounting_*.db"): files.setdefault(path.name,path)
+        return files
+
     def list_backups(self):
-        folder=Path(self.path).parent/"backups"
-        if not folder.exists(): return []
-        return [{"name":path.name,"size":path.stat().st_size,"modified":datetime.fromtimestamp(path.stat().st_mtime).isoformat()}
-                for path in sorted(folder.glob("saber_accounting_*.db"),reverse=True)]
+        files=self._backup_files()
+        return [{"name":path.name,"size":path.stat().st_size,"modified":datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+                 "kind":"safety" if "_safety" in path.stem else "older version" if path.name.startswith("saber_accounting_") and self.backup_label else "backup"}
+                for path in sorted(files.values(),key=lambda p:p.stat().st_mtime,reverse=True)]
+
+    def backup_path(self, name):
+        path=self._backup_files().get(Path(str(name)).name)
+        if not path or not path.exists(): raise ValueError("Backup was not found")
+        return path
 
     def restore_backup(self, name, user_id):
-        folder=(Path(self.path).parent/"backups").resolve(); source=(folder/Path(str(name)).name).resolve()
-        if source.parent!=folder or not source.exists(): raise ValueError("Backup was not found")
+        source=self.backup_path(name).resolve()
         self._validate_backup_file(source)
-        safety=self.backup()
+        safety=self.backup("safety")
         source_connection=sqlite3.connect(str(source)); target_connection=sqlite3.connect(self.path)
         try: source_connection.backup(target_connection)
         finally: target_connection.close(); source_connection.close()

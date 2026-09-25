@@ -749,6 +749,28 @@ class Version22Test(unittest.TestCase):
         invoices = read_invoice_lines(path, "sales")
         self.assertEqual([(i["invoice_number"], len(i["lines"])) for i in invoices], [("INV-001", 2), ("INV-002", 1)])
 
+class DeleteYearTest(unittest.TestCase):
+    def test_delete_last_year_and_redo_the_opening(self):
+        folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True); root = Path(folder.name)
+        master = Database(root / "master.db"); master.initialize("secret"); manager = CompanyManager(root / "master.db")
+        company = manager.list_companies()[0]["id"]; db = manager.database(company, 2024)
+        db.create_manual_invoice({"invoice_date": "15-03-2024", "party_name": "C", "kind": "sales", "currency": "USD", "status": "posted"}, [{"description": "S", "quantity": 1, "unit_price": 1000}], 1)
+        manager.close_and_open_year(company, 2024, 1)
+        next_year = manager.database(company, 2025)
+        next_year.create_manual_invoice({"invoice_date": "10-02-2025", "party_name": "C", "kind": "sales", "currency": "USD", "status": "posted"}, [{"description": "wrong", "quantity": 1, "unit_price": 5}], 1)
+        with self.assertRaisesRegex(ValueError, "Only the last fiscal year"): manager.delete_year(company, 2024, 1)
+        result = manager.delete_year(company, 2025, 1); self.assertEqual((result["deleted_year"], result["reopened_year"]), (2025, 2024))
+        with self.assertRaisesRegex(ValueError, "only fiscal year"): manager.delete_year(company, 2024, 1)
+        years = [y["year"] for y in manager.list_companies()[0]["years"]]
+        self.assertEqual(years, [2024]); self.assertEqual(manager.year_status(company, 2024), "open")
+        self.assertTrue(list((root / "companies" / company / "deleted_years").glob("2025_deleted_*.db")))
+        self.assertFalse([e for e in db.journal() if (e["description"] or "").startswith("CLOSING 6&7")])
+        manager.close_and_open_year(company, 2024, 1)
+        fresh = manager.database(company, 2025)
+        self.assertEqual(len(fresh.list_invoices()), 0)  # the deleted 2025 data is gone, the new opening is there
+        self.assertTrue([e for e in fresh.journal() if e["source_type"] == "opening"])
+        folder.cleanup()
+
 class StandaloneEndToEndTest(unittest.TestCase):
     """Runs the embedded data service exactly as the installed app does and drives it through the API."""
 

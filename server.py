@@ -39,11 +39,9 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _user(self):
         auth = self.headers.get("Authorization", "")
         token = auth[7:] if auth.startswith("Bearer ") else ""
-        user=self.master_db.user_for_token(token)
-        if user:
-            try: self.db.maybe_scheduled_backup()
-            except Exception: pass
-        return user
+        # Backups are made when the user asks (and automatically before a restore or an import that replaces data),
+        # not every time the program is opened.
+        return self.master_db.user_for_token(token)
 
     def _query(self, parsed, name, default=None):
         return parse_qs(parsed.query).get(name, [default])[0]
@@ -263,6 +261,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/api/users":
             if user["role"]!="admin": return self._json(403,{"error":"Administrator permission required"})
             return self._json(200,{"items":self.master_db.list_users()})
+        if path == "/api/backups/download":
+            try:
+                target=self.db.backup_path(self._query(parsed,"name",""))
+                return self._json(200,{"name":target.name,"content":base64.b64encode(target.read_bytes()).decode("ascii")})
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+        if path == "/api/backups/folder": return self._json(200,{"folder":str(self.db._backups_dir())})
         if path == "/api/backups":
             if user["role"]!="admin": return self._json(403,{"error":"Administrator permission required"})
             return self._json(200,{"items":self.db.list_backups()})
@@ -336,7 +340,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(201,{"company":result})
         self._select_database()
-        fiscal_admin_paths=("/api/fiscal-years/reopen","/api/fiscal-years/refresh-opening")
+        fiscal_admin_paths=("/api/fiscal-years/reopen","/api/fiscal-years/refresh-opening","/api/fiscal-years/delete")
         if path not in fiscal_admin_paths and self.headers.get("X-Company-ID") and self.headers.get("X-Fiscal-Year") and self.company_manager.year_status(self.headers.get("X-Company-ID"),self.headers.get("X-Fiscal-Year"))=="closed":
             return self._json(423,{"error":"This fiscal year is closed and read-only"})
         if user["role"] == "viewer":
@@ -533,6 +537,14 @@ class ApiHandler(BaseHTTPRequestHandler):
                 company_id=self.headers.get("X-Company-ID")
                 if not company_id: raise ValueError("Select a company before closing the fiscal year")
                 result=self.company_manager.close_and_open_year(company_id,body.get("year"),user["id"])
+            except Exception as exc: return self._json(400,{"error":str(exc)})
+            return self._json(200,result)
+        if path == "/api/fiscal-years/delete":
+            if user["role"] != "admin": return self._json(403,{"error":"Administrator permission required"})
+            try:
+                company_id=self.headers.get("X-Company-ID")
+                if not company_id: raise ValueError("Select a company first")
+                result=self.company_manager.delete_year(company_id,body.get("year"),user["id"])
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,result)
         if path == "/api/fiscal-years/reopen":

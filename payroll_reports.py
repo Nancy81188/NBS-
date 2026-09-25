@@ -278,8 +278,9 @@ def build_nssf_statement(db, period_type="monthly", year=None, index=1, include_
     headers = ["NSSF No. | رقم الضمان", "Employee | الأجير", "Month | الشهر", "Salary subject | الأجر الخاضع", "Sickness base | أساس المرض", "Employee 3% | حصة الأجير",
                "Employer 8% | صاحب العمل", "Family base | أساس العائلية", "Family 6% | العائلية", "EOS base | أساس نهاية الخدمة", "EOS 8.5% | نهاية الخدمة",
                "Total | المجموع", "Allowances | تعويضات مدفوعة", "Net due | الصافي"]
-    summary = [["Sickness & maternity - employee share", "المرض والأمومة - حصة الأجير", totals["employee"]],
-               ["Sickness & maternity - employer share", "المرض والأمومة - حصة صاحب العمل", totals["employer_sick"]],
+    summary = [["Sickness & maternity - employee share (3%)", "المرض والأمومة - حصة الأجير", totals["employee"]],
+               ["Sickness & maternity - employer share (8%)", "المرض والأمومة - حصة صاحب العمل", totals["employer_sick"]],
+               ["Sickness & maternity - total (11%)", "مجموع المرض والأمومة (11%)", totals["employee"] + totals["employer_sick"]],
                ["Family allowances branch", "فرع التعويضات العائلية", totals["family"]],
                ["End-of-service indemnity branch", "فرع تعويض نهاية الخدمة", totals["eos"]],
                ["TOTAL CONTRIBUTIONS", "مجموع الاشتراكات", totals["total"]],
@@ -287,7 +288,7 @@ def build_nssf_statement(db, period_type="monthly", year=None, index=1, include_
                ["NET AMOUNT PAYABLE TO THE NSSF (LBP)", "الصافي المتوجب دفعه للصندوق (ل.ل.)", totals["net"]]]
     ceilings = [[month[5:] + "-" + month[:4], _ceiling_text(v[0]), _ceiling_text(v[1]), _rate_text(v[2]), _rate_text(v[3]), _rate_text(v[4]), _rate_text(v[5])] for month, v in sorted(rates_seen.items())]
     sections = [{"heading": f"Employees - {label} | الأجراء", "headers": headers, "rows": rows if len(rows) > 1 else [["No payroll in this period"] + [""] * 13], "total_rows": [len(rows) - 1] if len(rows) > 1 else []},
-                {"heading": "Payment summary | خلاصة الدفع", "headers": ["Branch", "الفرع", "Amount (LBP)"], "rows": summary, "total_rows": [4, 6]},
+                {"heading": "Payment summary | خلاصة الدفع", "headers": ["Branch", "الفرع", "Amount (LBP)"], "rows": summary, "total_rows": [2, 5, 7]},
                 {"heading": "Monthly ceilings and rates applied | السقوف والنسب المعتمدة شهرياً", "headers": ["Month", "Sickness ceiling", "Family ceiling", "Employee", "Employer sickness", "Family", "End of service"],
                  "rows": ceilings or [["-"] * 7], "total_rows": []}]
     meta = [f"Employer: {company.get('company_name') or '-'}   Employer NSSF No.: {company.get('company_nssf') or '-'}   MOF No.: {company.get('company_mof') or '-'}",

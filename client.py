@@ -242,4 +242,8 @@ class ApiClient:
     def physical_count(self,count_id): return self.request("GET",f"/api/inventory/counts/{count_id}")
     def save_physical_count(self,header,lines,count_id=None,post=False): return self.request("POST","/api/inventory/counts",{"header":header,"lines":lines,"id":count_id,"post":post})
     def find_or_create_item(self,name,unit="unit",sku=None,supplier_id=None): return self.request("POST","/api/inventory/find-or-create",{"name":name,"unit":unit,"sku":sku,"supplier_id":supplier_id})["item"]
+    def delete_fiscal_year(self,year): return self.request("POST","/api/fiscal-years/delete",{"year":year})
+    def download_backup(self,name):
+        result=self.request("GET","/api/backups/download?"+urlencode({"name":name})); result["content"]=base64.b64decode(result["content"]); return result
+    def backup_folder(self): return self.request("GET","/api/backups/folder")["folder"]
 
