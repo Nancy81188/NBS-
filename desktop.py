@@ -895,18 +895,18 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         totals=tk.Frame(self.sales_tab,bg=LIGHT); totals.pack(side="bottom",fill="x",padx=10,pady=(2,4))
         self.sales_words=tk.Label(totals,text="",bg=LIGHT,fg="#5f6b76",anchor="w",justify="left",wraplength=400); self.sales_words.pack(side="left",fill="x",expand=True,padx=4)
         box=tk.Frame(totals,bg="#dfe6ee",padx=8,pady=4); box.pack(side="right")
-        discount=tk.Frame(box,bg="#dfe6ee"); discount.grid(row=1,column=4,columnspan=2,sticky="e",padx=6)
+        discount=tk.Frame(box,bg="#dfe6ee"); discount.grid(row=1,column=0,sticky="e")
         tk.Label(discount,text="Discount %",bg="#dfe6ee").pack(side="left"); e1=tk.Entry(discount,textvariable=self.sales_discount_percent,width=5); e1.pack(side="left",padx=2)
         tk.Label(discount,text="or amount",bg="#dfe6ee").pack(side="left"); e2=tk.Entry(discount,textvariable=self.sales_discount_amount,width=9); e2.pack(side="left",padx=2)
         for entry in (e1,e2): entry.bind("<KeyRelease>",lambda _event:self.update_sales_totals())
         self.sales_total_labels={}
-        for key,caption,row,column in (("Total","Total",0,0),("Discount","Discount",0,2),
-                                       ("Total HT","Total HT",0,4),("VAT","VAT 11%",1,0),("TOTAL","TOTAL",1,2)):
-            label=tk.Label(box,text=caption,bg="#dfe6ee",font=("Segoe UI",9,"bold" if key in ("Total HT","TOTAL") else "normal"))
-            label.grid(row=row,column=column,sticky="e",padx=(8,3))
-            if key=="VAT": self.sales_vat_caption=label
+        for row,(key,caption) in enumerate((("Total","Total"),("Discount",""),("Total HT","Total HT (before VAT)"),("VAT","VAT 11%"),("TOTAL","TOTAL"))):
+            if caption:
+                label=tk.Label(box,text=caption,bg="#dfe6ee",font=("Segoe UI",9,"bold" if key in ("Total HT","TOTAL") else "normal"))
+                label.grid(row=row,column=0,sticky="e",padx=4)
+                if key=="VAT": self.sales_vat_caption=label
             value=tk.Label(box,text="0.00",bg="#dfe6ee",width=11,anchor="e",font=("Segoe UI",10 if key=="TOTAL" else 9,"bold" if key in ("Total HT","TOTAL") else "normal"))
-            value.grid(row=row,column=column+1,sticky="e",padx=(0,4)); self.sales_total_labels[key]=value
+            value.grid(row=row,column=1,sticky="e"); self.sales_total_labels[key]=value
         self.sales_totals=tk.Label(totals,text="",bg=LIGHT,fg=NAVY); self.sales_totals.pack(side="right",padx=8)
         sheet_frame=tk.Frame(self.sales_tab,bg=LIGHT); sheet_frame.pack(fill="both",expand=True,padx=10,pady=(2,3))
         self.sales_columns=[("item_code","Item",90),("description","Description",250),("quantity","Qty",55),("unit","Unit",60),("unit_price","Unit Price",95),
