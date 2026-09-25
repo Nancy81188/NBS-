@@ -290,19 +290,23 @@ def write_invoice_template(path, kind):
     from openpyxl.styles import Font, PatternFill
     wb = Workbook(); ws = wb.active; ws.title = "Invoices"; headers = INVOICE_TEMPLATE[kind]; ws.append(headers)
     for cell in ws[1]: cell.font = Font(bold=True, color="FFFFFF"); cell.fill = PatternFill("solid", fgColor="071B2E")
+    examples = wb.create_sheet("Examples")
+    examples.append(headers)
     if kind == "sales":
-        ws.append(["INV-001", "25-09-2026", "Client A", "USD", "ITM-00001", "HPL Panel 8mm", 10, "sheet", 120, 0, 11, "Taxable"])
-        ws.append(["INV-001", "25-09-2026", "Client A", "USD", "", "Installation service", 1, "job", 300, 10, 11, "Taxable"])
-        ws.append(["INV-002", "26-09-2026", "Export Client", "USD", "", "Cladding panels (export)", 5, "sheet", 150, 0, 0, "Zero-rated"])
+        examples.append(["INV-001", "25-09-2026", "Client A", "USD", "ITM-00001", "HPL Panel 8mm", 10, "sheet", 120, 0, 11, "Taxable"])
+        examples.append(["INV-001", "25-09-2026", "Client A", "USD", "", "Installation service", 1, "job", 300, 10, 11, "Taxable"])
+        examples.append(["INV-002", "26-09-2026", "Export Client", "USD", "", "Cladding panels (export)", 5, "sheet", 150, 0, 0, "Zero-rated"])
     else:
-        ws.append(["PUR-778", "20-09-2026", "Supplier A", "USD", "", "HPL Panel 8mm", 50, "sheet", 80, 0, 11, "MAIN"])
-        ws.append(["PUR-778", "20-09-2026", "Supplier A", "USD", "", "Aluminium Profile", 200, "m", 8, 5, 11, "MAIN"])
+        examples.append(["PUR-778", "20-09-2026", "Supplier A", "USD", "", "HPL Panel 8mm", 50, "sheet", 80, 0, 11, "MAIN"])
+        examples.append(["PUR-778", "20-09-2026", "Supplier A", "USD", "", "Aluminium Profile", 200, "m", 8, 5, 11, "MAIN"])
     help_sheet = wb.create_sheet("How to fill")
-    for line in ("One row per invoice line. Rows with the same Invoice No become one invoice.", "Date: DD-MM-YYYY. Currency: USD, LBP, EUR or AED.",
+    for line in ("Fill the blank Invoices sheet; Examples are for reference and will not be imported.",
+                 "One row per invoice line. Rows with the same Invoice No become one invoice.", "Date: DD-MM-YYYY. Currency: USD, LBP, EUR or AED.",
                  "Item Code: optional. Purchases: an item that does not exist is created automatically from its name.",
                  "VAT Treatment (sales): Taxable, Zero-rated, Exempt or Out of scope. VAT %: 11 or 0.", "Warehouse (purchases): warehouse code, MAIN by default."):
         help_sheet.append([line])
     for column, width in zip("ABCDEFGHIJKL", (12, 12, 22, 9, 12, 30, 7, 8, 11, 10, 7, 14)): ws.column_dimensions[column].width = width
+    for column, width in zip("ABCDEFGHIJKL", (12, 12, 22, 9, 12, 30, 7, 8, 11, 10, 7, 14)): examples.column_dimensions[column].width = width
     wb.save(path)
 
 
@@ -334,4 +338,3 @@ def read_invoice_lines(path, kind):
                                            "unit": str(get("unit") or "").strip(), "unit_price": price, "discount_percent": discount, "vat_rate": vat})
         return [invoices[key] for key in order]
     finally: workbook.close()
-

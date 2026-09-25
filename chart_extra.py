@@ -1,6 +1,8 @@
 """Accounts the company asked for (created automatically when missing) and the default posting accounts."""
 
 EXTRA_ACCOUNTS = [
+    ("709000001", "Sales Credits - Goods Returns and Discounts", "income"),
+    ("719000001", "Sales Credits - Services and Production Discounts", "income"),
     ("44210", "VAT on Purchases - Deductible", "asset"), ("44211", "VAT on Export-related Purchases - Recoverable", "asset"),
     ("44216", "VAT on Expenses - Deductible", "asset"),
     ("6313", "Commissions", "expense"), ("6315", "Schooling Allowances", "expense"), ("6319", "Transport Allowances", "expense"),

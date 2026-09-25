@@ -16,6 +16,15 @@ class V22Mixin:
     # ------------------------------------------------------------ sales documents
     def sales_doc_type_changed(self):
         if not self.sales_edit_id: self.refresh_sales_number()
+        reverse=self.sales_doc_type.get()=="Credit Note"
+        account=self.sales_expense_account.get().split(" - ",1)[0].strip()
+        if reverse and not account.startswith(("709","719")):
+            self.sales_expense_account.set("709000001" if account.startswith("70") else "719000001")
+        elif not reverse and account in ("709000001","719000001"):
+            self.sales_expense_account.set("713100000")
+        self.sales_supplier_side.set("C - Credit" if reverse else "D - Debit")
+        self.sales_vat_side.set("D - Debit" if reverse else "C - Credit")
+        self.sales_expense_side.set("D - Debit" if reverse else "C - Credit")
         self.sales_mode_label.config(text=f"NEW {self.sales_doc_type.get().upper()}", bg="#8B1E1E" if self.sales_doc_type.get() == "Credit Note" else GOLD,
                                      fg="white" if self.sales_doc_type.get() == "Credit Note" else NAVY)
 
@@ -68,7 +77,7 @@ class V22Mixin:
         if not path: return
         try: write_invoice_template(path, kind)
         except Exception as exc: return messagebox.showerror("Excel Template", str(exc))
-        messagebox.showinfo("Excel Template", f"Template saved: {path}\nOne row per invoice line; rows with the same Invoice No become one invoice.")
+        messagebox.showinfo("Excel Template", f"Template saved: {path}\nFill the blank Invoices sheet, then use Import Excel. Examples are on a separate sheet.")
 
     def import_sales_excel(self):
         import invoice_calc
@@ -77,6 +86,7 @@ class V22Mixin:
         if not path: return
         try: invoices = read_invoice_lines(path, "sales")
         except Exception as exc: return messagebox.showerror("Import Sales", f"The Excel file could not be read: {exc}")
+        if not invoices: return messagebox.showwarning("Import Sales", "The Invoices sheet is empty. Fill its rows and try again.")
         if not messagebox.askyesno("Import Sales", f"Import {len(invoices)} invoice(s) as drafts (Review status)?"): return
         done = 0; errors = []
         for invoice in invoices:

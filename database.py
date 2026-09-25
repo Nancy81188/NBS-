@@ -778,7 +778,10 @@ class Database:
             vat_account = str(item.get("vat_account") or default_vat).strip()
             expense_account = str(item.get("expense_account") or (DEFAULT_LEBANESE_ACCOUNTS["sales"] if kind=="sale" else EXPENSE_ACCOUNT_9)).strip()
             expense_no_vat_account=str(item.get("expense_no_vat_account") or EXPENSE_NO_VAT_ACCOUNT_9).strip()
-            supplier_side=self._side(item.get("supplier_side"),"C"); vat_side=self._side(item.get("vat_side"),"D"); expense_side=self._side(item.get("expense_side"),"D"); expense_no_vat_side=self._side(item.get("expense_no_vat_side"),"D")
+            supplier_side=self._side(item.get("supplier_side"),"D" if kind=="sale" else "C")
+            vat_side=self._side(item.get("vat_side"),"C" if kind=="sale" else "D")
+            expense_side=self._side(item.get("expense_side"),"C" if kind=="sale" else "D")
+            expense_no_vat_side=self._side(item.get("expense_no_vat_side"),"D")
             account_definitions = [
                 (supplier_account, "Client Account" if kind=="sale" else "Supplier Account", "asset" if kind=="sale" else "liability"),
                 (vat_account, "Output VAT Account" if kind=="sale" else "VAT Account", "liability" if kind=="sale" else "asset"),
@@ -811,11 +814,15 @@ class Database:
             entry = db.execute("INSERT INTO journal_entries(entry_number,entry_date,description,source_type,source_id,currency,branch_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (entry_number, item.get("invoice_date"), f"{entry_type.replace('_',' ').title()} {item['invoice_number']}", "invoice", invoice_id, item.get("currency", "USD"),branch_id, user_id, utcnow()))
             if kind == "sale":
-                lines = [(supplier_account, total, 0), (expense_account, 0, subtotal), (vat_account, 0, vat)]
+                lines = [self._line_for_side(supplier_account,total,self._side(item.get("supplier_side"),"D")),
+                         self._line_for_side(expense_account,subtotal,self._side(item.get("expense_side"),"C")),
+                         self._line_for_side(vat_account,vat,self._side(item.get("vat_side"),"C"))]
             else:
                 lines = [self._line_for_side(expense_account,deductible,expense_side),self._line_for_side(expense_no_vat_account,non_deductible,expense_no_vat_side),self._line_for_side(vat_account,vat,vat_side),self._line_for_side(supplier_account,total,supplier_side)]
             lines=[line for line in lines if Decimal(str(line[1])) or Decimal(str(line[2]))]
             difference = sum(x[1] for x in lines) - sum(x[2] for x in lines)
+            if kind=="sale" and any(item.get(key) for key in ("supplier_side","expense_side","vat_side")) and difference:
+                raise ValueError("Sales posting accounts are unbalanced. Check their Debit/Credit selections.")
             if difference > 0:
                 lines.append((DEFAULT_LEBANESE_ACCOUNTS["import_variance"], 0, difference))
             elif difference < 0:

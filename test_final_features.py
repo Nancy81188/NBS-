@@ -710,9 +710,16 @@ class Version22Test(unittest.TestCase):
         invoice = self.db.create_manual_invoice({"invoice_date": "10-02-2026", "party_name": "Client A", "kind": "sales", "currency": "USD", "status": "posted"}, calc["lines"], self.user)
         note = invoice_calc.calculate([{"description": "Return", "quantity": 1, "unit_price": 100}])
         credit = self.db.create_manual_invoice({"invoice_date": "12-02-2026", "party_name": "Client A", "kind": "sales", "currency": "USD", "status": "posted", "doc_subtype": "credit_note",
-            "invoice_number": self.db.next_invoice_number("credit_note", "12-02-2026"), "supplier_side": "C - Credit", "vat_side": "D - Debit", "expense_side": "D - Debit"}, note["lines"], self.user)
+            "invoice_number": self.db.next_invoice_number("credit_note", "12-02-2026"), "supplier_side": "C - Credit", "vat_side": "D - Debit", "expense_side": "D - Debit",
+            "expense_account": "719000001"}, note["lines"], self.user)
         rows = {r["id"]: r for r in self.db.list_invoices()}
         self.assertEqual((rows[credit]["invoice_number"], rows[credit]["doc_subtype"]), ("CN-2026-000001", "credit_note"))
+        self.assertEqual(rows[credit]["expense_account"],"719000001")
+        self.assertIn("709000001",{account["code"] for account in self.db.list_accounts()})
+        credit_lines = {row["account_code"]: (float(row["debit"]),float(row["credit"])) for row in self.db.journal() if row["source_id"]==credit}
+        self.assertEqual(credit_lines[rows[credit]["supplier_account"]], (0,111))
+        self.assertEqual(credit_lines[rows[credit]["expense_account"]], (100,0))
+        self.assertEqual(credit_lines[rows[credit]["vat_account"]], (11,0))
         vat = vat_return.build_vat_return(self.db, 2026, 1)["per_currency"]["USD"]["sales"]["vat"]
         self.assertEqual(float(vat), 110 - 11)  # the credit note reduces the output VAT
         payment = self.db.add_payment({"kind": "customer_receipt", "party_id": self.client_party["id"], "payment_date": "20-02-2026", "currency": "USD", "amount": "500"}, self.user)
@@ -747,7 +754,18 @@ class Version22Test(unittest.TestCase):
         self.assertEqual(report["sections"][0]["rows"][0][0], item["sku"])
         path = Path(self.folder.name) / "sales.xlsx"; write_invoice_template(path, "sales")
         invoices = read_invoice_lines(path, "sales")
-        self.assertEqual([(i["invoice_number"], len(i["lines"])) for i in invoices], [("INV-001", 2), ("INV-002", 1)])
+        self.assertEqual(invoices, [])
+        from openpyxl import load_workbook
+        workbook = load_workbook(path)
+        try:
+            self.assertEqual(workbook.sheetnames, ["Invoices", "Examples", "How to fill"])
+            self.assertEqual(workbook["Examples"]["A2"].value, "INV-001")
+            worksheet = workbook["Invoices"]
+            worksheet.append(["INV-101", "25-09-2026", "Client A", "USD", "", "Service", 1, "job", 100, 0, 11, "Taxable"])
+            workbook.save(path)
+        finally: workbook.close()
+        invoices = read_invoice_lines(path, "sales")
+        self.assertEqual([(i["invoice_number"], len(i["lines"])) for i in invoices], [("INV-101", 1)])
 
 class DeleteYearTest(unittest.TestCase):
     def test_delete_last_year_and_redo_the_opening(self):
