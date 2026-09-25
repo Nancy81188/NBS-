@@ -7,6 +7,7 @@ import base64
 import json
 import sqlite3
 import tempfile
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -590,7 +591,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 # A failed row leaves the live database untouched.
                 with self.db._lock, tempfile.TemporaryDirectory() as directory:
                     stage_path=Path(directory)/"replacement.db"
-                    with sqlite3.connect(self.db.path) as source, sqlite3.connect(stage_path) as stage:
+                    with closing(sqlite3.connect(self.db.path)) as source, closing(sqlite3.connect(stage_path)) as stage:
                         source.backup(stage)
                     stage_db=Database(stage_path)
                     try: replacement=stage_db.clear_invoices(user["id"],make_backup=False)
@@ -603,7 +604,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         return self._json(400,{"error":"Replacement cancelled; no existing data was changed","errors":errors})
                     try:
                         safety=self.db.backup("safety")
-                        with sqlite3.connect(stage_path) as source,sqlite3.connect(self.db.path) as target:
+                        with closing(sqlite3.connect(stage_path)) as source,closing(sqlite3.connect(self.db.path)) as target:
                             source.backup(target)
                     except Exception as exc: return self._json(500,{"error":f"Replacement could not be saved: {exc}"})
                     return self._json(200,{"imported":len(ids),"ids":ids,"errors":[],"deleted":replacement["deleted"],"backup":safety})

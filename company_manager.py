@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 import sqlite3
+from contextlib import closing
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -200,9 +201,9 @@ class CompanyManager:
             self._write(data)
         except Exception:
             # Restore both company-year files to their pre-close state; keep the safety copies.
-            with sqlite3.connect(source_backup) as old,sqlite3.connect(source.path) as live: old.backup(live)
+            with closing(sqlite3.connect(source_backup)) as old,closing(sqlite3.connect(source.path)) as live: old.backup(live)
             if target_backup:
-                with sqlite3.connect(target_backup) as old,sqlite3.connect(next_record["database"]) as live: old.backup(live)
+                with closing(sqlite3.connect(target_backup)) as old,closing(sqlite3.connect(next_record["database"])) as live: old.backup(live)
             raise
         return {**close_result,"company":company,"opening_vouchers":opening_vouchers,"stock_openings":stock_openings}
 

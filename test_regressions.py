@@ -16,7 +16,7 @@ from pdf_import import read_invoice_pdf_pages
 class DataSafetyTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.folder = tempfile.TemporaryDirectory()
+        cls.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         cls.database = Path(cls.folder.name) / "saber_accounting_v0_7.db"
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0)); cls.port = probe.getsockname()[1]

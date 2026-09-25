@@ -9,7 +9,7 @@ import sqlite3
 import tempfile
 import threading
 import urllib.request
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -2699,13 +2699,13 @@ class Database:
         """Validate destructive edits on a snapshot; publish only a complete result."""
         with self._lock, tempfile.TemporaryDirectory() as directory:
             stage_path=Path(directory)/"edited.db"
-            with sqlite3.connect(self.path) as source,sqlite3.connect(stage_path) as stage:
+            with closing(sqlite3.connect(self.path)) as source, closing(sqlite3.connect(stage_path)) as stage:
                 source.backup(stage)
             stage_db=Database(stage_path)
             operation=stage_db._replace_payment_on_stage if kind=="payment" else stage_db._replace_expense_on_stage
             new_id=operation(record_id,item,user_id)
             self.backup("safety")
-            with sqlite3.connect(stage_path) as source,sqlite3.connect(self.path) as target:
+            with closing(sqlite3.connect(stage_path)) as source, closing(sqlite3.connect(self.path)) as target:
                 source.backup(target)
             return new_id
 
