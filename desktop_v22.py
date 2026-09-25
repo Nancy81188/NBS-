@@ -16,6 +16,10 @@ class V22Mixin:
     # ------------------------------------------------------------ sales documents
     def sales_doc_type_changed(self):
         if not self.sales_edit_id: self.refresh_sales_number()
+        reverse=self.sales_doc_type.get()=="Credit Note"
+        self.sales_supplier_side.set("C - Credit" if reverse else "D - Debit")
+        self.sales_vat_side.set("D - Debit" if reverse else "C - Credit")
+        self.sales_expense_side.set("D - Debit" if reverse else "C - Credit")
         self.sales_mode_label.config(text=f"NEW {self.sales_doc_type.get().upper()}", bg="#8B1E1E" if self.sales_doc_type.get() == "Credit Note" else GOLD,
                                      fg="white" if self.sales_doc_type.get() == "Credit Note" else NAVY)
 

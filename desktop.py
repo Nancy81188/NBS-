@@ -849,7 +849,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.sales_party_box=ttk.Combobox(top,textvariable=self.sales_party,width=26); self.sales_party_box.pack(side="left",padx=(4,12))
         self.sales_party_box.bind("<KeyRelease>",self.search_sales_customers); self.sales_party_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_customer_chosen())
         tk.Label(top,text="Client Account",bg=LIGHT).pack(side="left",padx=(0,4))
-        self.account_search_box(top,self.sales_supplier_account,12).pack(side="left",padx=(0,12))
+        tk.Entry(top,textvariable=self.sales_supplier_account,width=14).pack(side="left",padx=(0,12))
         tk.Label(top,text="Currency",bg=LIGHT).pack(side="left")
         ttk.Combobox(top,textvariable=self.sales_currency,values=["USD","EUR","LBP","AED"],state="readonly",width=6).pack(side="left",padx=(4,12))
         self.sales_mode_label=tk.Label(top,text="NEW INVOICE",bg=GOLD,fg=NAVY,font=("Segoe UI",8,"bold"),padx=8); self.sales_mode_label.pack(side="left",padx=6)
@@ -874,6 +874,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         treatment_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_treatment_changed())
         self.sales_exchange=tk.Label(dims,text="",bg=LIGHT,fg="#5f6b76",anchor="w"); self.sales_exchange.pack(side="left",padx=(12,0))
         self.sales_payment_method.trace_add("write",lambda *_args:self.sales_payment_changed())
+        self.sales_supplier_account.trace_add("write",lambda *_args:self.sales_account_chosen())
         self.sales_currency.trace_add("write",lambda *_args:self.update_sales_totals())
         self.sales_date.trace_add("write",lambda *_args:self.sales_date_changed())
 
@@ -994,7 +995,16 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
     def sales_customer_chosen(self):
         party=getattr(self,"sales_customers",{}).get(self.sales_party.get())
         if party:
-            if party.get("account_number"): self.sales_supplier_account.set(party["account_number"])
+            self.sales_supplier_account.set(party.get("account_number") or "")
+            if party.get("currency"): self.sales_currency.set(party["currency"])
+
+    def sales_account_chosen(self):
+        code=self.sales_supplier_account.get().split(" - ",1)[0].strip()
+        if not code: return
+        party=next((party for party in getattr(self,"sales_customers",{}).values()
+                    if str(party.get("account_number") or "").strip()==code),None)
+        if party:
+            self.sales_party.set(party["name"])
             if party.get("currency"): self.sales_currency.set(party["currency"])
 
     def new_sales_invoice(self,confirm=True):
@@ -1002,7 +1012,10 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.sales_edit_id=None; self.sales_items=[]; self.sales_sheet.delete(*self.sales_sheet.get_children())
         self._sales_loaded_state=None
         self.sales_party.set(""); self.sales_supplier_account.set(""); self.sales_amount_paid.set("0"); self.sales_due_date.set(""); self.sales_open_choice.set("")
-        self.sales_supplier_side.set("D - Debit"); self.sales_vat_side.set("C - Credit"); self.sales_expense_side.set("C - Credit")
+        reverse=self.sales_doc_type.get()=="Credit Note"
+        self.sales_supplier_side.set("C - Credit" if reverse else "D - Debit")
+        self.sales_vat_side.set("D - Debit" if reverse else "C - Credit")
+        self.sales_expense_side.set("D - Debit" if reverse else "C - Credit")
         self.sales_payment_method.set("On Account (Not Cash)"); self.sales_date.set(datetime.now().strftime("%d-%m-%Y"))
         self.sales_department.set("(none)"); self.sales_project.set("(none)"); self.sales_treatment.set("Taxable 11%")
         self.sales_discount_percent.set("0"); self.sales_discount_amount.set("0")
@@ -1215,7 +1228,8 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         except Exception as exc: messagebox.showerror("Sales Invoice",str(exc)); return False
         self.sales_edit_id=row["id"]; self.sales_items=[]; self.sales_sheet.delete(*self.sales_sheet.get_children())
         self.sales_no.set(detail["invoice_number"]); self.sales_date.set(safe_display_date(detail["invoice_date"])); self.sales_party.set(detail["party_name"] or "")
-        self.sales_currency.set(detail["currency"]); self.sales_supplier_account.set(detail.get("supplier_account") or ""); self.sales_vat_account.set(detail.get("vat_account") or "4427")
+        self.sales_supplier_account.set(detail.get("supplier_account") or ""); self.sales_party.set(detail["party_name"] or "")
+        self.sales_currency.set(detail["currency"]); self.sales_vat_account.set(detail.get("vat_account") or "4427")
         self.sales_expense_account.set(detail.get("expense_account") or "713100000"); self.sales_payment_method.set(detail.get("payment_method") or "On Account (Not Cash)")
         self.sales_branch.set(detail.get("branch_name") or "Head Office")
         sides=(detail.get("supplier_side") or "D",detail.get("vat_side") or "C",detail.get("expense_side") or "C")
@@ -1268,8 +1282,8 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
                  "doc_subtype":{"Credit Note":"credit_note","Debit Note":"debit_note"}.get(self.sales_doc_type.get(),"invoice"),
                  "invoice_discount_percent":self.sales_discount_percent.get().strip() or "0","invoice_discount_amount":self.sales_discount_amount.get().strip() or "0",
                  "gross_before_discount":getattr(self,"sales_calculation",{}).get("total","")}
-        if invoice["doc_subtype"]=="credit_note":  # a credit note reverses the sale: Cr customer / Dr revenue and VAT
-            invoice.update(supplier_side="C - Credit",vat_side="D - Debit",expense_side="D - Debit",expense_no_vat_side="D - Debit",amount_paid="0")
+        if invoice["doc_subtype"]=="credit_note":
+            invoice["amount_paid"]="0"
         try:
             invoice["invoice_date"]=formatted_user_date(invoice["invoice_date"])
             if invoice["due_date"]: invoice["due_date"]=formatted_user_date(invoice["due_date"])

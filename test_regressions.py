@@ -114,6 +114,22 @@ class DataSafetyTest(unittest.TestCase):
         SaberApp.navigate_sales_invoice(state,1)
         self.assertEqual(state.sales_open_choice.get(),"second")
 
+    def test_invoice_customer_and_account_match_both_ways(self):
+        from types import SimpleNamespace
+        from desktop import SaberApp
+        class Choice:
+            def __init__(self,value=""): self.value=value
+            def get(self): return self.value
+            def set(self,value): self.value=value
+        customer={"name":"Client A","account_number":"411100001","currency":"USD"}
+        state=SimpleNamespace(sales_customers={"Client A":customer},sales_party=Choice("Client A"),
+                              sales_supplier_account=Choice(),sales_currency=Choice("EUR"))
+        SaberApp.sales_customer_chosen(state)
+        self.assertEqual(state.sales_supplier_account.get(),"411100001")
+        state.sales_party.set(""); state.sales_supplier_account.set("411100001")
+        SaberApp.sales_account_chosen(state)
+        self.assertEqual((state.sales_party.get(),state.sales_currency.get()),("Client A","USD"))
+
     def test_replacement_rejects_allocated_invoices(self):
         db=Database(self.database)
         user=db.user_for_token(db.login("admin","secret12345")["token"])["id"]
