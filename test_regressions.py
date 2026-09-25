@@ -91,6 +91,29 @@ class DataSafetyTest(unittest.TestCase):
         self.assertEqual([row["invoice_number"] for row in invoices[:2]],["101","102"])
         self.assertIn("scanned",invoices[2]["notes"])
 
+    def test_invoice_vat_lbp_uses_rate_as_of_invoice_date(self):
+        from desktop import SaberApp
+        rates=[{"rate_date":"20-09-2026","from_currency":"USD","to_currency":"LBP","rate":90000},
+               {"rate_date":"15-09-2026","from_currency":"USD","to_currency":"LBP","rate":89500}]
+        selected=SaberApp.sales_rates_for_date(rates,"18-09-2026")
+        self.assertEqual(SaberApp.exchange_equivalents(None,11,"USD",selected)[0],984500)
+        self.assertEqual(SaberApp.sales_rates_for_date(rates,"01-09-2026"),[])
+
+    def test_invoice_arrows_follow_order_and_keep_selection_on_cancel(self):
+        from types import SimpleNamespace
+        from desktop import SaberApp
+        class Choice:
+            value="first"
+            def get(self): return self.value
+            def set(self,value): self.value=value
+        state=SimpleNamespace(sales_open_map={"first":{"id":1},"second":{"id":2}},
+                              sales_edit_id=1,sales_open_choice=Choice(),open_sales_invoice=lambda:False)
+        SaberApp.navigate_sales_invoice(state,1)
+        self.assertEqual(state.sales_open_choice.get(),"first")
+        state.open_sales_invoice=lambda:True
+        SaberApp.navigate_sales_invoice(state,1)
+        self.assertEqual(state.sales_open_choice.get(),"second")
+
     def test_replacement_rejects_allocated_invoices(self):
         db=Database(self.database)
         user=db.user_for_token(db.login("admin","secret12345")["token"])["id"]

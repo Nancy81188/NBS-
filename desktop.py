@@ -838,30 +838,35 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.sales_supplier_side=tk.StringVar(value="D - Debit"); self.sales_vat_side=tk.StringVar(value="C - Credit"); self.sales_expense_side=tk.StringVar(value="C - Credit"); self.sales_expense_no_vat_side=tk.StringVar(value="C - Credit")
         self.sales_due_date=tk.StringVar(); self.sales_payment_method=tk.StringVar(value="On Account (Not Cash)"); self.sales_amount_paid=tk.StringVar(value="0"); self.sales_branch=tk.StringVar(value="Head Office")
         self.sales_open_choice=tk.StringVar()
-        top=tk.Frame(header,bg=LIGHT); top.grid(row=0,column=0,columnspan=8,sticky="w")
+        details=ttk.Notebook(header); details.pack(fill="x")
+        invoice_details=tk.Frame(details,bg=LIGHT); account_details=tk.Frame(details,bg=LIGHT)
+        details.add(invoice_details,text="Invoice details"); details.add(account_details,text="Posting accounts")
+        top=tk.Frame(invoice_details,bg=LIGHT); top.pack(anchor="w",fill="x",pady=(3,0))
         tk.Label(top,text="Invoice No.",bg=LIGHT,font=("Segoe UI",9,"bold")).pack(side="left",padx=(0,4))
         tk.Entry(top,textvariable=self.sales_no,width=18,font=("Segoe UI",10,"bold"),state="readonly",readonlybackground="white").pack(side="left",padx=(0,12))
         tk.Label(top,text="Date",bg=LIGHT).pack(side="left"); self.date_entry(top,self.sales_date,12).pack(side="left",padx=(4,12))
         tk.Label(top,text="Customer",bg=LIGHT).pack(side="left")
         self.sales_party_box=ttk.Combobox(top,textvariable=self.sales_party,width=26); self.sales_party_box.pack(side="left",padx=(4,12))
         self.sales_party_box.bind("<KeyRelease>",self.search_sales_customers); self.sales_party_box.bind("<<ComboboxSelected>>",lambda _event:self.sales_customer_chosen())
+        tk.Label(top,text="Client Account",bg=LIGHT).pack(side="left",padx=(0,4))
+        self.account_search_box(top,self.sales_supplier_account,12).pack(side="left",padx=(0,12))
         tk.Label(top,text="Currency",bg=LIGHT).pack(side="left")
         ttk.Combobox(top,textvariable=self.sales_currency,values=["USD","EUR","LBP","AED"],state="readonly",width=6).pack(side="left",padx=(4,12))
         self.sales_mode_label=tk.Label(top,text="NEW INVOICE",bg=GOLD,fg=NAVY,font=("Segoe UI",8,"bold"),padx=8); self.sales_mode_label.pack(side="left",padx=6)
         account_fields=[("Client Account",self.sales_supplier_account,self.sales_supplier_side),("VAT Account",self.sales_vat_account,self.sales_vat_side),("Revenue Account",self.sales_expense_account,self.sales_expense_side)]
-        accounts=tk.Frame(header,bg=LIGHT); accounts.grid(row=1,column=0,columnspan=8,sticky="w",pady=(3,0))
         for label,var,side in account_fields:
-            tk.Label(accounts,text=label,bg=LIGHT).pack(side="left",padx=(0,4))
-            self.account_search_box(accounts,var,12).pack(side="left")
-            side_box=ttk.Combobox(accounts,textvariable=side,values=["D - Debit","C - Credit"],state="readonly",width=9); side_box.pack(side="left",padx=(3,10))
+            row=tk.Frame(account_details,bg=LIGHT); row.pack(anchor="w",pady=2)
+            tk.Label(row,text=label,bg=LIGHT,width=17,anchor="w").pack(side="left",padx=(6,4))
+            self.account_search_box(row,var,28).pack(side="left",padx=(0,12))
+            side_box=ttk.Combobox(row,textvariable=side,values=["D - Debit","C - Credit"],state="readonly",width=11); side_box.pack(side="left",padx=(3,10))
             side_box.bind("<<ComboboxSelected>>",lambda _event:self.update_sales_totals())
-        payment=tk.Frame(header,bg=LIGHT); payment.grid(row=2,column=0,columnspan=8,sticky="w",pady=(3,0))
+        payment=tk.Frame(invoice_details,bg=LIGHT); payment.pack(anchor="w",fill="x",pady=(3,0))
         tk.Label(payment,text="Payment Mode",bg=LIGHT).pack(side="left")
         ttk.Combobox(payment,textvariable=self.sales_payment_method,values=["On Account (Not Cash)","Cash","Bank Transfer","Cheque","Card","Other"],state="readonly",width=20).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Due Date",bg=LIGHT).pack(side="left"); self.date_entry(payment,self.sales_due_date,12).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Amount Paid",bg=LIGHT).pack(side="left"); tk.Entry(payment,textvariable=self.sales_amount_paid,width=12).pack(side="left",padx=(4,12))
         tk.Label(payment,text="Branch",bg=LIGHT).pack(side="left"); self.branch_selector(payment,self.sales_branch,16,False).pack(side="left",padx=(4,10))
-        dims=tk.Frame(header,bg=LIGHT); dims.grid(row=3,column=0,columnspan=8,sticky="w",pady=(3,0))
+        dims=tk.Frame(invoice_details,bg=LIGHT); dims.pack(anchor="w",fill="x",pady=(3,0))
         self.sales_department=tk.StringVar(); self.sales_project=tk.StringVar(); self.dimension_selectors(dims,self.sales_department,self.sales_project)
         self.sales_treatment=tk.StringVar(value="Taxable 11%")
         tk.Label(dims,text="VAT Treatment",bg=LIGHT,font=("Segoe UI",9,"bold")).pack(side="left",padx=(6,4))
@@ -883,14 +888,18 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         tk.Button(toolbar,text="Save & Post",command=lambda:self.save_sales_invoice(True),bg=GOLD,fg=NAVY,font=("Segoe UI",10,"bold"),border=0,padx=14,pady=4).pack(side="left",padx=2)
         self.action_button(toolbar,"Duplicate",self.duplicate_sales_invoice).pack(side="left",padx=(8,2))
         tk.Label(toolbar,text="Find No.",bg=LIGHT).pack(side="left",padx=(8,2))
-        self.sales_open_box=ttk.Combobox(toolbar,textvariable=self.sales_open_choice,width=20); self.sales_open_box.pack(side="left")
+        self.sales_open_box=ttk.Combobox(toolbar,textvariable=self.sales_open_choice,width=18); self.sales_open_box.pack(side="left",padx=(0,4))
         self.sales_open_box.bind("<<ComboboxSelected>>",lambda _event:self.open_sales_invoice()); self.sales_open_box.bind("<KeyRelease>",self.search_open_sales)
         self.sales_open_box.bind("<Return>",lambda _event:self.open_sales_by_number())
+        self.sales_previous=tk.Button(toolbar,text="◀",command=lambda:self.navigate_sales_invoice(-1),bg=NAVY,fg="white",border=0,padx=8,pady=4)
+        self.sales_previous.pack(side="left",padx=2)
+        self.sales_next=tk.Button(toolbar,text="▶",command=lambda:self.navigate_sales_invoice(1),bg=NAVY,fg="white",border=0,padx=8,pady=4)
+        self.sales_next.pack(side="left",padx=2)
         toolbar2=tk.Frame(self.sales_tab,bg=LIGHT); toolbar2.pack(fill="x",padx=10,pady=(2,0))
         for text,command in (("Print Preview",lambda:self.sales_invoice_pdf("preview")),("PDF",lambda:self.sales_invoice_pdf("pdf")),("Print",lambda:self.sales_invoice_pdf("print")),
                              ("Excel",lambda:self.sales_entry_report("xlsx"))):
             tk.Button(toolbar2,text=text,command=command,bg=NAVY,fg="white",border=0,padx=10,pady=4).pack(side="left",padx=2)
-        for text,command in (("Import Excel",self.import_sales_excel),("Import PDF",self.import_sales_pdf),("Excel Template",lambda:self.save_invoice_template("sales"))):
+        for text,command in (("Import Excel",self.import_sales_excel),("Download Import Template",lambda:self.save_invoice_template("sales")),("Import PDF",self.import_sales_pdf)):
             tk.Button(toolbar2,text=text,command=command,bg=GOLD,fg=NAVY,border=0,padx=10,pady=4).pack(side="left",padx=(8 if text=="Import Excel" else 2,2))
         totals=tk.Frame(self.sales_tab,bg=LIGHT); totals.pack(side="bottom",fill="x",padx=10,pady=(2,4))
         self.sales_words=tk.Label(totals,text="",bg=LIGHT,fg="#5f6b76",anchor="w",justify="left",wraplength=400); self.sales_words.pack(side="left",fill="x",expand=True,padx=4)
@@ -907,6 +916,8 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
                 if key=="VAT": self.sales_vat_caption=label
             value=tk.Label(box,text="0.00",bg="#dfe6ee",width=11,anchor="e",font=("Segoe UI",10 if key=="TOTAL" else 9,"bold" if key in ("Total HT","TOTAL") else "normal"))
             value.grid(row=row,column=1,sticky="e"); self.sales_total_labels[key]=value
+        self.sales_vat_lbp=tk.Label(box,text="VAT (LBP): 0.00",bg="#dfe6ee",fg=NAVY,anchor="e",font=("Segoe UI",9,"bold"))
+        self.sales_vat_lbp.grid(row=5,column=0,columnspan=2,sticky="e",padx=4)
         self.sales_totals=tk.Label(totals,text="",bg=LIGHT,fg=NAVY); self.sales_totals.pack(side="right",padx=8)
         sheet_frame=tk.Frame(self.sales_tab,bg=LIGHT); sheet_frame.pack(fill="both",expand=True,padx=10,pady=(2,3))
         self.sales_columns=[("item_code","Item",90),("description","Description",250),("quantity","Qty",55),("unit","Unit",60),("unit_price","Unit Price",95),
@@ -947,9 +958,26 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.sales_party_box["values"]=list(self.sales_customers)
         try: invoices=[r for r in self.client.invoices() if r["kind"]=="sale" and r.get("status")!="cancelled"]
         except Exception: invoices=[]
+        invoices.sort(key=lambda r:(sortable_date(r["invoice_date"]),str(r["invoice_number"]),r["id"]))
         self.sales_open_map={f'{r["invoice_number"]} | {r["invoice_date"]} | {r["party_name"]} | {float(r["total"] or 0):,.2f} {r["currency"]}':r for r in invoices}
         self.sales_open_all=invoices
         self.sales_open_box["values"]=list(self.sales_open_map)
+        self.update_sales_navigation()
+
+    def update_sales_navigation(self):
+        keys=list(getattr(self,"sales_open_map",{}))
+        current=next((i for i,key in enumerate(keys) if self.sales_edit_id and self.sales_open_map[key]["id"]==self.sales_edit_id),None)
+        if hasattr(self,"sales_previous"):
+            self.sales_previous.config(state="normal" if current is not None and current>0 else "disabled")
+            self.sales_next.config(state="normal" if current is not None and current<len(keys)-1 else "disabled")
+
+    def navigate_sales_invoice(self,step):
+        keys=list(getattr(self,"sales_open_map",{}))
+        current=next((i for i,key in enumerate(keys) if self.sales_edit_id and self.sales_open_map[key]["id"]==self.sales_edit_id),None)
+        if current is None or not 0<=current+step<len(keys): return
+        previous=self.sales_open_choice.get()
+        self.sales_open_choice.set(keys[current+step])
+        if not self.open_sales_invoice(): self.sales_open_choice.set(previous)
 
     def search_sales_customers(self,_event=None):
         typed=self.sales_party.get().strip().casefold(); names=list(getattr(self,"sales_customers",{}))
@@ -972,11 +1000,14 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
     def new_sales_invoice(self,confirm=True):
         if confirm and self.sales_items and not messagebox.askyesno("Sales Invoice","Start a new invoice? Lines that are not saved will be cleared."): return
         self.sales_edit_id=None; self.sales_items=[]; self.sales_sheet.delete(*self.sales_sheet.get_children())
+        self._sales_loaded_state=None
         self.sales_party.set(""); self.sales_supplier_account.set(""); self.sales_amount_paid.set("0"); self.sales_due_date.set(""); self.sales_open_choice.set("")
+        self.sales_supplier_side.set("D - Debit"); self.sales_vat_side.set("C - Credit"); self.sales_expense_side.set("C - Credit")
         self.sales_payment_method.set("On Account (Not Cash)"); self.sales_date.set(datetime.now().strftime("%d-%m-%Y"))
         self.sales_department.set("(none)"); self.sales_project.set("(none)"); self.sales_treatment.set("Taxable 11%")
         self.sales_discount_percent.set("0"); self.sales_discount_amount.set("0")
         self.sales_mode_label.config(text="NEW INVOICE",bg=GOLD); self.load_sales_customer_list(); self.refresh_sales_number()
+        self.update_sales_navigation()
         self.add_sales_item(); self.update_sales_totals()
 
     def sales_row_values(self,item):
@@ -1088,7 +1119,15 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
             from report_export import shape_arabic
             words=amount_in_words(result["grand_total"],currency); self.sales_words.config(text=f'{words["en"]}\n{shape_arabic(words["ar"])}')
         self.sales_totals.config(text=f'{len(lines)} line(s)')
-        if hasattr(self,"sales_exchange"): self.sales_exchange.config(text=self.exchange_equivalent_text(result["grand_total"],currency))
+        if hasattr(self,"sales_exchange") or hasattr(self,"sales_vat_lbp"):
+            try: rates=self.client.exchange_rates()
+            except Exception: rates=[]
+            rates=self.sales_rates_for_date(rates,self.sales_date.get())
+            if hasattr(self,"sales_exchange"):
+                self.sales_exchange.config(text=self.exchange_equivalent_text(result["grand_total"],currency,rates))
+            lbp,_=self.exchange_equivalents(result["vat"],currency,rates) if result["vat"] else (0.0,None)
+            if hasattr(self,"sales_vat_lbp"):
+                self.sales_vat_lbp.config(text=f"VAT (LBP): {lbp:,.2f}" if lbp is not None else "VAT (LBP): rate unavailable")
 
     def sales_type_changed(self):
         self.calculate_sales_line(); self.update_sales_totals()
@@ -1107,11 +1146,25 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         if lbp is None and usd is not None: lbp=convert(usd,"USD","LBP")
         return lbp,usd
 
-    def exchange_equivalent_text(self, amount, currency):
+    @staticmethod
+    def sales_rates_for_date(rates,invoice_date):
+        """Use the most recent available rate on or before the invoice date per pair."""
+        try: day=parse_user_date(invoice_date)
+        except (ValueError,TypeError): return rates
+        selected={}
+        for row in rates:
+            rate_day=sortable_date(row.get("rate_date"))
+            if rate_day==datetime.min or rate_day>day: continue
+            pair=(row["from_currency"],row["to_currency"])
+            if pair not in selected or rate_day>selected[pair][0]: selected[pair]=(rate_day,row)
+        return [entry[1] for entry in selected.values()]
+
+    def exchange_equivalent_text(self, amount, currency, rates=None):
         if not amount:
             return "Exchange equivalent: 0.00"
-        try: rates=self.client.exchange_rates()
-        except Exception: rates=[]
+        if rates is None:
+            try: rates=self.client.exchange_rates()
+            except Exception: rates=[]
         lbp,usd=self.exchange_equivalents(amount,currency,rates)
         if currency=="LBP":
             return f"Exchange equivalent: USD {usd:,.2f}" if usd is not None else "Exchange equivalent: USD rate not entered"
@@ -1148,15 +1201,29 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
 
     def open_sales_invoice(self):
         row=getattr(self,"sales_open_map",{}).get(self.sales_open_choice.get())
-        if not row: return
+        if not row: return False
+        if self.sales_edit_id and getattr(self,"_sales_loaded_state",None)!=self.sales_form_state():
+            prompt="Reload this invoice?" if self.sales_edit_id==row["id"] else "Open another invoice?"
+            if not messagebox.askyesno("Sales Invoice",f"{prompt} Unsaved changes will be cleared."):
+                self.sales_open_choice.set(next((key for key,item in self.sales_open_map.items() if item["id"]==self.sales_edit_id),""))
+                return False
         if self.sales_items and any(i.get("description") for i in self.sales_items) and not self.sales_edit_id:
-            if not messagebox.askyesno("Sales Invoice","Open this invoice? The lines you are typing now will be cleared."): return
+            if not messagebox.askyesno("Sales Invoice","Open this invoice? The lines you are typing now will be cleared."):
+                self.sales_open_choice.set("")
+                return False
         try: items=self.client.invoice_items(row["id"]); detail=next(r for r in self.client.invoices() if r["id"]==row["id"])
-        except Exception as exc: return messagebox.showerror("Sales Invoice",str(exc))
+        except Exception as exc: messagebox.showerror("Sales Invoice",str(exc)); return False
         self.sales_edit_id=row["id"]; self.sales_items=[]; self.sales_sheet.delete(*self.sales_sheet.get_children())
         self.sales_no.set(detail["invoice_number"]); self.sales_date.set(safe_display_date(detail["invoice_date"])); self.sales_party.set(detail["party_name"] or "")
         self.sales_currency.set(detail["currency"]); self.sales_supplier_account.set(detail.get("supplier_account") or ""); self.sales_vat_account.set(detail.get("vat_account") or "4427")
         self.sales_expense_account.set(detail.get("expense_account") or "713100000"); self.sales_payment_method.set(detail.get("payment_method") or "On Account (Not Cash)")
+        self.sales_branch.set(detail.get("branch_name") or "Head Office")
+        sides=(detail.get("supplier_side") or "D",detail.get("vat_side") or "C",detail.get("expense_side") or "C")
+        if sides==("C","D","D") and detail.get("doc_subtype")!="credit_note":
+            sides=("D","C","C")  # older sales stored purchase-side defaults despite posting Dr client / Cr revenue and VAT
+        self.sales_supplier_side.set("D - Debit" if sides[0].startswith("D") else "C - Credit")
+        self.sales_vat_side.set("D - Debit" if sides[1].startswith("D") else "C - Credit")
+        self.sales_expense_side.set("D - Debit" if sides[2].startswith("D") else "C - Credit")
         lists=self.dimension_lists(refresh=True)
         self.sales_department.set(next((f'{d["code"]} - {d["name"]}' for d in lists["departments"] if d["id"]==detail.get("department_id")),"(none)"))
         self.sales_project.set(next((f'{p["code"]} - {p["name"]}' for p in lists["projects"] if p["id"]==detail.get("project_id")),"(none)"))
@@ -1170,6 +1237,18 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
             self.add_sales_item(item)
         status={"posted":"POSTED","review":"DRAFT"}.get(detail.get("status"),str(detail.get("status")).upper())
         self.sales_mode_label.config(text=f"EDITING {detail['invoice_number']} ({status})",bg="#dfe6ee")
+        self._sales_loaded_state=self.sales_form_state()
+        self.update_sales_navigation()
+        return True
+
+    def sales_form_state(self):
+        fields=(self.sales_no,self.sales_date,self.sales_party,self.sales_currency,self.sales_supplier_account,self.sales_vat_account,
+                self.sales_expense_account,self.sales_supplier_side,self.sales_vat_side,self.sales_expense_side,self.sales_payment_method,
+                self.sales_due_date,self.sales_amount_paid,self.sales_branch,self.sales_department,self.sales_project,self.sales_treatment,
+                self.sales_doc_type,self.sales_discount_percent,self.sales_discount_amount)
+        lines=tuple((item.get("item_code"),item.get("description"),item.get("quantity"),item.get("unit"),
+                     item.get("unit_price"),item.get("discount_percent"),item.get("vat_rate")) for item in self.sales_items)
+        return tuple(field.get() for field in fields),lines
 
     def save_sales_invoice(self,post=False):
         self.update_sales_totals()
@@ -1181,6 +1260,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
                  "supplier_account":self.sales_supplier_account.get().split(" - ",1)[0].strip(),
                  "vat_account":self.sales_vat_account.get().split(" - ",1)[0].strip() or "4427",
                  "expense_account":self.sales_expense_account.get().split(" - ",1)[0].strip() or "713100000",
+                 "supplier_side":self.sales_supplier_side.get(),"vat_side":self.sales_vat_side.get(),"expense_side":self.sales_expense_side.get(),
                  "due_date":self.sales_due_date.get().strip(),"payment_method":self.sales_payment_method.get(),"amount_paid":self.sales_amount_paid.get().strip().replace(",","") or "0",
                  "branch":self.sales_branch.get(),"status":"posted" if post else "review","source_file":"Sales Invoice","source_row":None,
                  "department":self.dimension_code(self.sales_department.get()),"project":self.dimension_code(self.sales_project.get()),

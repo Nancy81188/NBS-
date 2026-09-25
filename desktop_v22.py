@@ -68,7 +68,7 @@ class V22Mixin:
         if not path: return
         try: write_invoice_template(path, kind)
         except Exception as exc: return messagebox.showerror("Excel Template", str(exc))
-        messagebox.showinfo("Excel Template", f"Template saved: {path}\nOne row per invoice line; rows with the same Invoice No become one invoice.")
+        messagebox.showinfo("Excel Template", f"Template saved: {path}\nFill the blank Invoices sheet, then use Import Excel. Examples are on a separate sheet.")
 
     def import_sales_excel(self):
         import invoice_calc
@@ -77,6 +77,7 @@ class V22Mixin:
         if not path: return
         try: invoices = read_invoice_lines(path, "sales")
         except Exception as exc: return messagebox.showerror("Import Sales", f"The Excel file could not be read: {exc}")
+        if not invoices: return messagebox.showwarning("Import Sales", "The Invoices sheet is empty. Fill its rows and try again.")
         if not messagebox.askyesno("Import Sales", f"Import {len(invoices)} invoice(s) as drafts (Review status)?"): return
         done = 0; errors = []
         for invoice in invoices:
