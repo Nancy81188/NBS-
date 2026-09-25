@@ -6,8 +6,10 @@ import json
 import secrets
 import shutil
 import sqlite3
+import tempfile
+import threading
 import urllib.request
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -235,22 +237,28 @@ def verify_password(password, encoded):
     return hmac.compare_digest(candidate, digest_hex)
 
 class Database:
+    _locks = {}
+    _locks_guard = threading.Lock()
+
     def __init__(self, path):
         self.path = str(Path(path))
+        with self._locks_guard:
+            self._lock = self._locks.setdefault(str(Path(path).resolve()), threading.RLock())
 
     @contextmanager
     def connect(self):
-        connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        try:
-            yield connection
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with self._lock:
+            connection = sqlite3.connect(self.path)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            try:
+                yield connection
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
 
     def initialize(self, admin_password):
         with self.connect() as db:
@@ -641,9 +649,10 @@ class Database:
         label = self.backup_label or "saber_accounting"
         target = folder / f"{label}_{datetime.now():%Y-%m-%d_%H%M%S}{'_' + kind if kind != 'backup' else ''}.db"
         if target.exists(): target = folder / f"{target.stem}_{datetime.now():%f}.db"
-        source_connection = sqlite3.connect(str(source)); target_connection = sqlite3.connect(str(target))
-        try: source_connection.backup(target_connection)
-        finally: target_connection.close(); source_connection.close()
+        with self._lock:
+            source_connection = sqlite3.connect(str(source)); target_connection = sqlite3.connect(str(target))
+            try: source_connection.backup(target_connection)
+            finally: target_connection.close(); source_connection.close()
         return str(target)
 
     @staticmethod
@@ -717,10 +726,21 @@ class Database:
             return path
         return None
 
-    def clear_invoices(self, user_id):
-        backup_path = self.backup()
+    def clear_invoices(self, user_id, make_backup=True):
         with self.connect() as db:
-            entry_ids = [r["id"] for r in db.execute("SELECT id FROM journal_entries WHERE source_type IN ('invoice','journal_voucher')")]
+            if db.execute("SELECT 1 FROM payment_allocations LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked while payments are allocated to existing invoices")
+            if db.execute("SELECT 1 FROM stock_documents WHERE invoice_id IS NOT NULL LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked while stock documents are linked to invoices")
+            if db.execute("SELECT 1 FROM vat_returns LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked after a quarterly VAT return has been saved")
+            if db.execute("SELECT 1 FROM fiscal_years WHERE status='closed' LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked while a fiscal year is closed")
+            if db.execute("SELECT 1 FROM invoices WHERE CAST(COALESCE(amount_paid,'0') AS REAL)>0 LIMIT 1").fetchone():
+                raise ValueError("Invoice replacement is blocked while existing invoices have payments recorded")
+        backup_path = self.backup("safety") if make_backup else None
+        with self.connect() as db:
+            entry_ids = [r["id"] for r in db.execute("SELECT id FROM journal_entries WHERE source_type IN ('invoice','invoice_reversal','vat_reclass') AND (source_type!='vat_reclass' OR entry_number LIKE 'VATND-INV-%')")]
             if entry_ids:
                 marks = ",".join("?" for _ in entry_ids)
                 db.execute(f"DELETE FROM journal_lines WHERE entry_id IN ({marks})", entry_ids)
@@ -2664,6 +2684,9 @@ class Database:
         return {"deleted": int(payment_id)}
 
     def update_payment(self, payment_id, item, user_id):
+        return self._safe_replacement("payment", payment_id, item, user_id)
+
+    def _replace_payment_on_stage(self, payment_id, item, user_id):
         with self.connect() as db:
             row = db.execute("SELECT * FROM payments WHERE id=?", (int(payment_id),)).fetchone()
             if not row: raise KeyError("Payment not found")
@@ -2671,6 +2694,20 @@ class Database:
         self._assert_period_open(row["payment_date"])
         self.delete_payment(payment_id, user_id)
         return self.add_payment(item, user_id)
+
+    def _safe_replacement(self, kind, record_id, item, user_id):
+        """Validate destructive edits on a snapshot; publish only a complete result."""
+        with self._lock, tempfile.TemporaryDirectory() as directory:
+            stage_path=Path(directory)/"edited.db"
+            with closing(sqlite3.connect(self.path)) as source, closing(sqlite3.connect(stage_path)) as stage:
+                source.backup(stage)
+            stage_db=Database(stage_path)
+            operation=stage_db._replace_payment_on_stage if kind=="payment" else stage_db._replace_expense_on_stage
+            new_id=operation(record_id,item,user_id)
+            self.backup("safety")
+            with closing(sqlite3.connect(stage_path)) as source, closing(sqlite3.connect(self.path)) as target:
+                source.backup(target)
+            return new_id
 
     # ---------------------------------------------------------------- expenses: edit / delete / attachments
     def delete_expense(self, expense_id, user_id):
@@ -2685,6 +2722,9 @@ class Database:
         return {"deleted": int(expense_id)}
 
     def update_expense(self, expense_id, item, user_id):
+        return self._safe_replacement("expense", expense_id, item, user_id)
+
+    def _replace_expense_on_stage(self, expense_id, item, user_id):
         with self.connect() as db:
             row = db.execute("SELECT * FROM expenses WHERE id=?", (int(expense_id),)).fetchone()
             if not row: raise KeyError("Expense not found")
@@ -2900,4 +2940,3 @@ class Database:
         with self.connect() as db:
             return [dict(r) for r in db.execute("""SELECT a.invoice_id,i.invoice_number,i.invoice_date,CAST(a.amount AS REAL) amount FROM payment_allocations a
                 JOIN invoices i ON i.id=a.invoice_id WHERE a.payment_id=? ORDER BY a.id""", (int(payment_id),))]
-

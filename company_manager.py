@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 import sqlite3
+from contextlib import closing
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -51,7 +52,9 @@ class CompanyManager:
 
     def database(self,company_id=None,year=None):
         companies=self.list_companies(True)
-        company=next((c for c in companies if c["id"]==(company_id or "saber-for-audit")),None) or companies[0]
+        if not companies: raise KeyError("No company is configured")
+        company=next((c for c in companies if c["id"]==company_id),None) if company_id else companies[0]
+        if not company: raise KeyError("Company not found")
         years=company.get("years",[])
         selected=next((y for y in years if int(y["year"])==int(year)),None) if year else (max(years,key=lambda y:int(y["year"])) if years else None)
         if not selected: raise KeyError("Fiscal year not found")
@@ -66,9 +69,10 @@ class CompanyManager:
         return self._cache[path]
 
     def year_status(self,company_id,year):
-        company=self._company(company_id or "saber-for-audit")
+        company=self._company(company_id)
         selected=next((item for item in company.get("years",[]) if int(item["year"])==int(year)),None)
-        return selected.get("status","open") if selected else "open"
+        if not selected: raise KeyError("Fiscal year not found")
+        return selected.get("status","open")
 
     def create_company(self,item,master_db):
         name=str(item.get("name") or "").strip(); year=int(item.get("year") or datetime.now().year)
@@ -176,22 +180,31 @@ class CompanyManager:
         if not current: raise ValueError("Fiscal year not found for this company")
         next_record=next((item for item in company.get("years",[]) if int(item["year"])==next_year),None)
         source=Database(current["database"])
-        close_result=source.close_fiscal_year(year,user_id)
-        current["status"]="closed"
-        if next_record:
-            path=Path(next_record["database"]); target=Database(path)
-            with target.connect() as db:
-                ids=[row["id"] for row in db.execute("SELECT id FROM journal_entries WHERE source_type='opening' AND entry_number LIKE ?",(f"OPEN-{next_year}-%",))]
-                for entry_id in ids: db.execute("DELETE FROM journal_entries WHERE id=?",(entry_id,))
-        else:
-            path=self.root/company_id/f"{next_year}.db"; path.parent.mkdir(parents=True,exist_ok=True)
-            target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
-        opening_vouchers=self._opening_balances(source,target,next_year,user_id)
-        import inventory
-        stock_openings=inventory.carry_forward(source,target,next_year,user_id)
-        if not next_record: company["years"].append({"year":next_year,"database":str(path.resolve()),"status":"open"})
-        company["years"].sort(key=lambda item:int(item["year"]))
-        self._write(data)
+        source_backup=source.backup("safety")
+        target_backup=Database(next_record["database"]).backup("safety") if next_record else None
+        try:
+            close_result=source.close_fiscal_year(year,user_id)
+            current["status"]="closed"
+            if next_record:
+                path=Path(next_record["database"]); target=Database(path)
+                with target.connect() as db:
+                    ids=[row["id"] for row in db.execute("SELECT id FROM journal_entries WHERE source_type='opening' AND entry_number LIKE ?",(f"OPEN-{next_year}-%",))]
+                    for entry_id in ids: db.execute("DELETE FROM journal_entries WHERE id=?",(entry_id,))
+            else:
+                path=self.root/company_id/f"{next_year}.db"; path.parent.mkdir(parents=True,exist_ok=True)
+                target=Database(path); target.initialize(secrets.token_urlsafe(24)); self._copy_master_data(source,target)
+            opening_vouchers=self._opening_balances(source,target,next_year,user_id)
+            import inventory
+            stock_openings=inventory.carry_forward(source,target,next_year,user_id)
+            if not next_record: company["years"].append({"year":next_year,"database":str(path.resolve()),"status":"open"})
+            company["years"].sort(key=lambda item:int(item["year"]))
+            self._write(data)
+        except Exception:
+            # Restore both company-year files to their pre-close state; keep the safety copies.
+            with closing(sqlite3.connect(source_backup)) as old,closing(sqlite3.connect(source.path)) as live: old.backup(live)
+            if target_backup:
+                with closing(sqlite3.connect(target_backup)) as old,closing(sqlite3.connect(next_record["database"])) as live: old.backup(live)
+            raise
         return {**close_result,"company":company,"opening_vouchers":opening_vouchers,"stock_openings":stock_openings}
 
     def _copy_master_data(self,source,target):

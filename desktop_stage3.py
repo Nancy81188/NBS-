@@ -8,7 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from importer import read_customs_costs, read_expenses, read_invoices
-from pdf_import import read_invoice_pdf
+from pdf_import import read_invoice_pdf, read_invoice_pdf_pages
 
 NAVY, GOLD, LIGHT = "#071b2e", "#c9a96a", "#f3f6f8"
 PURCHASE_USES = {"Mixed (partial deduction)": "mixed", "Taxable sales only (100%)": "taxable", "Exempt sales only (0%)": "exempt"}
@@ -92,10 +92,14 @@ class Stage3Mixin:
         if not paths: return
         rows = []
         for path in paths:
-            data = read_invoice_pdf(path)
-            rows.append({"invoice_number": data.get("invoice_number") or "", "invoice_date": data.get("invoice_date") or datetime.now().strftime("%d-%m-%Y"),
+            try: documents=read_invoice_pdf_pages(path)
+            except Exception as exc:
+                messagebox.showerror("Import PDF",f"{Path(path).name}: {exc}")
+                continue
+            for data in documents:
+                rows.append({"invoice_number": data.get("invoice_number") or "", "invoice_date": data.get("invoice_date") or datetime.now().strftime("%d-%m-%Y"),
                          "party_name": data.get("party_name") or "", "currency": data.get("currency") or self.currency.get(),
-                         "subtotal": data.get("subtotal"), "vat": data.get("vat"), "total": data.get("total"), "source": data["file"], "notes": data.get("notes", ""), "_path": path})
+                         "subtotal": data.get("subtotal"), "vat": data.get("vat"), "total": data.get("total"), "source": f'{data["file"]} - {data["page_range"]}', "notes": data.get("notes", ""), "_path": path})
         self.import_mode = "pdf"; self.import_rows = rows
         self.file_label.config(text=f"{len(paths)} PDF file(s). Double-click any cell to correct it before importing.", fg=NAVY); self.populate_import_preview()
 
@@ -134,17 +138,21 @@ class Stage3Mixin:
                 result = self.client.import_invoices(items, replace_existing=self.import_replace.get()); done = result["imported"]
                 errors = [f"{e.get('invoice_number')}: {e['error']}" for e in result["errors"]]
             else:
-                if self.import_replace.get(): self.client.import_invoices([], replace_existing=True)
+                items=[]
                 for r in rows:
                     subtotal = r.get("subtotal") if r.get("subtotal") is not None else r["total"] - (r.get("vat") or 0); vat = r.get("vat") or 0
-                    invoice = {"invoice_number": r.get("invoice_number") or "", "invoice_date": r["invoice_date"], "party_name": r["party_name"], "kind": entry_type,
-                               "currency": r["currency"], "status": "posted", "source_file": r["source"]}
-                    line = {"description": f"Invoice {r.get('invoice_number') or ''} ({r['source']})".strip(), "quantity": 1, "unit_price": subtotal, "deductible_subtotal": subtotal,
-                            "vat": vat, "vat_rate": round(vat / subtotal * 100, 4) if subtotal else 0}
+                    items.append({"invoice_number": r.get("invoice_number") or str(r["line"]), "invoice_date": r["invoice_date"], "party_name": r["party_name"],
+                                  "kind": kind, "entry_type": entry_type, "currency": r["currency"], "subtotal": subtotal, "vat": vat,
+                                  "total": r["total"], "source_file": r["source"]})
+                result=self.client.import_invoices(items, replace_existing=self.import_replace.get())
+                done=result["imported"]
+                errors=[f"{e.get('invoice_number')}: {e['error']}" for e in result["errors"]]
+                failed={e["index"] for e in result["errors"]}
+                successful_rows=[r for index,r in enumerate(rows) if index not in failed]
+                for r, invoice_id in zip(successful_rows,result["ids"]):
                     try:
-                        invoice_id = self.client.create_manual_invoice(invoice, [line])["invoice_id"]; done += 1
                         self.client.upload_attachment(invoice_id, Path(r["_path"]).name, "application/pdf", Path(r["_path"]).read_bytes())
-                    except Exception as exc: errors.append(f"{r['line']}: {exc}")
+                    except Exception as exc: errors.append(f"{r['line']}: PDF attachment failed: {exc}")
         except Exception as exc: return messagebox.showerror("Import", str(exc))
         message = f"{done} {self.import_type.get().lower()} imported." + (f"\n\n{len(errors)} row(s) not imported:\n" + "\n".join(errors[:12]) if errors else "")
         (messagebox.showwarning if errors else messagebox.showinfo)("Import", message)

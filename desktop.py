@@ -22,7 +22,7 @@ from desktop_stage3 import Stage3Mixin
 from desktop_inventory import InventoryMixin
 from desktop_v22 import V22Mixin
 
-NAVY, GOLD, LIGHT = "#071b2e", "#c9a96a", "#f3f6f8"
+NAVY, GOLD, LIGHT = "#102A43", "#B78B45", "#F4F7FA"
 SALE_TREATMENTS={"Taxable 11%":"standard","Zero-rated (export)":"zero_rated","Exempt (Art. 16-17)":"exempt","Out of scope":"out_of_scope"}
 PURCHASE_USES={"Mixed (partial deduction)":"mixed","Taxable sales only (100%)":"taxable","Exempt sales only (0%)":"exempt"}
 
@@ -126,10 +126,14 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
     def _style(self):
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("TNotebook.Tab", padding=(8, 8), font=("Segoe UI", 8, "bold"))
-        style.configure("Treeview", rowheight=28, font=("Segoe UI", 9))
+        style.configure("TNotebook", background=LIGHT, borderwidth=0)
+        style.configure("TNotebook.Tab", padding=(12, 9), font=("Segoe UI", 9, "bold"), background="#E5ECF2", foreground=NAVY)
+        style.map("TNotebook.Tab", background=[("selected", "white"), ("active", "#D6E4ED")], foreground=[("selected", NAVY)])
+        style.configure("Treeview", rowheight=31, font=("Segoe UI", 9), background="white", fieldbackground="white", foreground=NAVY)
+        style.map("Treeview", background=[("selected", "#D6E4ED")], foreground=[("selected", NAVY)])
         style.configure("Treeview.Heading", background=NAVY, foreground="white", font=("Segoe UI", 9, "bold"))
         style.map("Treeview.Heading", background=[("active", NAVY)])
+        style.configure("TCombobox", padding=5)
 
     def clear(self):
         for child in self.winfo_children(): child.destroy()
@@ -275,7 +279,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
             row,column=divmod(index,per_row)
             tab_nav.grid_columnconfigure(column,weight=1,uniform="main_tabs")
             button=tk.Button(tab_nav,text=name,command=lambda p=page:self.select_main_tab(p),bg=NAVY,fg="white",
-                activebackground=GOLD,activeforeground=NAVY,border=1,font=("Segoe UI",8,"bold"),pady=3,wraplength=112)
+                activebackground=GOLD,activeforeground=NAVY,border=0,font=("Segoe UI",9,"bold"),pady=7,wraplength=130,cursor="hand2")
             button.grid(row=row,column=column,sticky="nsew",padx=2,pady=2); self.tab_buttons.append(button)
         notebook.bind("<<NotebookTabChanged>>",lambda _event:self.highlight_main_tab())
         self.highlight_main_tab()
@@ -1891,16 +1895,17 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
     def build_settings(self):
         nested=ttk.Notebook(self.settings_tab); nested.pack(fill="both",expand=True,padx=10,pady=10)
         users=tk.Frame(nested,bg=LIGHT); backups=tk.Frame(nested,bg=LIGHT); rates=tk.Frame(nested,bg=LIGHT); branches=tk.Frame(nested,bg=LIGHT); general=tk.Frame(nested,bg=LIGHT)
-        nested.add(users,text="Users & Permissions"); nested.add(backups,text="Backup & Restore"); nested.add(rates,text="Exchange Rates"); nested.add(branches,text="Branches"); nested.add(general,text="General Settings"); self.build_dimensions_pages(nested)
-        self.build_users_page(users)
+        is_admin=(self.current_user or {}).get("role")=="admin"
+        if is_admin: nested.add(users,text="Users & Permissions")
+        nested.add(backups,text="Backup & Restore" if is_admin else "My Backups"); nested.add(rates,text="Exchange Rates"); nested.add(branches,text="Branches"); nested.add(general,text="General Settings"); self.build_dimensions_pages(nested)
+        if is_admin: self.build_users_page(users)
         backup_controls=tk.Frame(backups,bg=LIGHT); backup_controls.pack(fill="x",padx=10,pady=10)
         self.backup_scope=tk.Label(backups,text="",bg=LIGHT,fg=NAVY,font=("Segoe UI",10,"bold"),anchor="w"); self.backup_scope.pack(fill="x",padx=14,before=backup_controls)
         tk.Button(backup_controls,text="Create Backup Now",command=self.create_backup,bg=GOLD,fg=NAVY,border=0,padx=15,pady=7,font=("Segoe UI",9,"bold")).pack(side="left",padx=4)
         self.action_button(backup_controls,"Save Backup As... (USB / Drive)",self.save_backup_as).pack(side="left",padx=4)
         self.action_button(backup_controls,"Open Backup Folder",self.open_backup_folder).pack(side="left",padx=4)
-        tk.Button(backup_controls,text="Restore Selected",command=self.restore_selected_backup,bg="#8B1E1E",fg="white",border=0,padx=15,pady=7).pack(side="left",padx=4)
-        tk.Label(backups,text="Each company and each fiscal year has its own backups. A backup is made only when you press 'Create Backup Now' "
-                 "(and automatically before a restore or an import that replaces data - marked 'safety').",bg=LIGHT,fg="#5f6b76",wraplength=1050,justify="left").pack(fill="x",padx=14)
+        if is_admin: tk.Button(backup_controls,text="Restore Selected",command=self.restore_selected_backup,bg="#8B1E1E",fg="white",border=0,padx=15,pady=7).pack(side="left",padx=4)
+        tk.Label(backups,text="Backups are saved by company and fiscal year automatically each day while signed in to Windows. You can also create or export one here.",bg=LIGHT,fg="#5f6b76",wraplength=1050,justify="left").pack(fill="x",padx=14)
         self.backups_tree=self.table(backups,[("name","Backup File",430),("kind","Type",100),("size","Size",100),("modified","Created",170)])
         rate_controls=tk.Frame(rates,bg=LIGHT); rate_controls.pack(fill="x",padx=10,pady=10)
         self.rate_date=tk.StringVar(value=datetime.now().strftime("%d-%m-%Y")); self.rate_date_to=tk.StringVar(value=datetime.now().strftime("%d-%m-%Y")); self.rate_from=tk.StringVar(value="USD"); self.rate_to=tk.StringVar(value="LBP"); self.rate_value=tk.StringVar(value="1")
@@ -1930,7 +1935,7 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         self.load_settings_pages()
 
     def load_settings_pages(self):
-        if not hasattr(self,"users_tree"): return
+        if not hasattr(self,"backups_tree"): return
         try:
             settings=self.client.settings(); rates=self.client.exchange_rates()
             self.base_currency.set(settings.get("base_currency","USD")); self.backup_hours.set(settings.get("backup_interval_hours","24"))
@@ -1942,11 +1947,13 @@ class SaberApp(V22Mixin, InventoryMixin, Stage3Mixin, DimensionsMixin, BrainsScr
         except Exception: branch_rows=[]
         self.branches_tree.delete(*self.branches_tree.get_children())
         for row in branch_rows: self.branches_tree.insert("","end",values=(row["id"],row["name"],"Yes" if row["active"] else "No"))
-        try: users=self.client.users(); backups=self.client.backups()
-        except Exception:
-            users=[]; backups=[]
-        self.users_tree.delete(*self.users_tree.get_children()); self.backups_tree.delete(*self.backups_tree.get_children())
-        self.fill_users_tree(users)
+        try: backups=self.client.backups()
+        except Exception: backups=[]
+        self.backups_tree.delete(*self.backups_tree.get_children())
+        if (self.current_user or {}).get("role")=="admin":
+            try: users=self.client.users()
+            except Exception: users=[]
+            self.users_tree.delete(*self.users_tree.get_children()); self.fill_users_tree(users)
         for row in backups: self.backups_tree.insert("","end",iid=row["name"],values=(row["name"],row.get("kind","backup"),f'{row["size"]/1024/1024:,.2f} MB',row["modified"][:19].replace("T"," ")))
         if hasattr(self,"backup_scope"): self.backup_scope.config(text=f'Backups of {getattr(self,"current_company",{}).get("name","")} - fiscal year {getattr(self,"current_fiscal_year","")}')
 
