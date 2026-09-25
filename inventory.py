@@ -107,21 +107,21 @@ def save_item(database, item, user_id):
 
 
 # ---------------------------------------------------------------- costing engine
-def _movements(database, date_to=None):
+def _movements(database, date_to=None, exclude_document_id=None):
     with database.connect() as db:
         rows = [dict(r) for r in db.execute("""SELECT m.*,d.number,d.doc_type,d.doc_date,d.reference,d.party_id,d.invoice_id,p.name party_name,w.code warehouse_code
             FROM stock_movements m JOIN stock_documents d ON d.id=m.document_id LEFT JOIN parties p ON p.id=d.party_id LEFT JOIN warehouses w ON w.id=m.warehouse_id
             ORDER BY d.doc_date,d.id,m.id""")]
-    return [r for r in rows if not date_to or r["doc_date"] <= date_to]
+    return [r for r in rows if (not date_to or r["doc_date"] <= date_to) and r["document_id"] != exclude_document_id]
 
 
-def run_costing(database, date_to=None, method=None, callback=None):
+def run_costing(database, date_to=None, method=None, callback=None, exclude_document_id=None):
     """Replays every movement in date order. Returns per-item {qty, value, by_warehouse, last_date}.
 
     Average: each receipt re-weights the cost; issues leave at the running average.
     FIFO: issues consume the oldest receipt layers first. Transfers move quantity only."""
     method = method or settings(database)["method"]; state = {}
-    for row in _movements(database, date_to):
+    for row in _movements(database, date_to, exclude_document_id):
         item = state.setdefault(row["item_id"], {"qty": ZERO, "value": ZERO, "layers": [], "by_warehouse": {}, "last_date": None, "last_out": None})
         qty = _d(row["quantity"]); cost = _d(row["unit_cost"])
         item["by_warehouse"][row["warehouse_id"]] = item["by_warehouse"].get(row["warehouse_id"], ZERO) + qty
@@ -234,15 +234,7 @@ def save_document(database, header, lines, user_id, document_id=None):
 
 
 def _state_without(database, date, document_id):
-    with database.connect() as db:
-        rows = [dict(r) for r in db.execute("SELECT * FROM stock_movements WHERE document_id=?", (int(document_id),))]
-        db.execute("DELETE FROM stock_movements WHERE document_id=?", (int(document_id),))
-    try: return run_costing(database, date)
-    finally:
-        with database.connect() as db:
-            for r in rows:
-                db.execute("""INSERT INTO stock_movements(id,item_id,movement_date,quantity,unit_cost,source_type,source_id,warehouse_id,document_id,movement_type,sales_price,line_no)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", tuple(r.get(k) for k in ("id", "item_id", "movement_date", "quantity", "unit_cost", "source_type", "source_id", "warehouse_id", "document_id", "movement_type", "sales_price", "line_no")))
+    return run_costing(database, date, exclude_document_id=int(document_id))
 
 
 def get_document(database, document_id):
@@ -277,19 +269,10 @@ def delete_document(database, document_id, user_id):
 
 
 def _check_after_removal(database, document_id):
-    with database.connect() as db:
-        rows = [dict(r) for r in db.execute("SELECT * FROM stock_movements WHERE document_id=?", (int(document_id),))]
-        db.execute("DELETE FROM stock_movements WHERE document_id=?", (int(document_id),))
-    try:
-        balances = {}
-        for row in _movements(database):
-            key = (row["item_id"], row["warehouse_id"]); balances[key] = balances.get(key, ZERO) + _d(row["quantity"])
-            if balances[key] < 0: raise ValueError(f"This document cannot be deleted: the stock issued later ({row['number']} on {display_date(row['doc_date'])}) would become negative")
-    finally:
-        with database.connect() as db:
-            for r in rows:
-                db.execute("""INSERT INTO stock_movements(id,item_id,movement_date,quantity,unit_cost,source_type,source_id,warehouse_id,document_id,movement_type,sales_price,line_no)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", tuple(r.get(k) for k in ("id", "item_id", "movement_date", "quantity", "unit_cost", "source_type", "source_id", "warehouse_id", "document_id", "movement_type", "sales_price", "line_no")))
+    balances = {}
+    for row in _movements(database, exclude_document_id=int(document_id)):
+        key = (row["item_id"], row["warehouse_id"]); balances[key] = balances.get(key, ZERO) + _d(row["quantity"])
+        if balances[key] < 0: raise ValueError(f"This document cannot be deleted: the stock issued later ({row['number']} on {display_date(row['doc_date'])}) would become negative")
 
 
 def issue_for_invoice(database, invoice_id, lines, user_id):
@@ -582,4 +565,3 @@ def get_count(database, count_id):
 def list_counts(database):
     with database.connect() as db:
         return [dict(r) for r in db.execute("SELECT c.id,c.number,c.count_date,c.status,c.adjustment_numbers,w.code warehouse_code FROM physical_counts c JOIN warehouses w ON w.id=c.warehouse_id ORDER BY c.id DESC")]
-

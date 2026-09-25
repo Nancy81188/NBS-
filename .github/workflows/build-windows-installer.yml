@@ -35,10 +35,16 @@ jobs:
       - name: Build standalone application (data service included)
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed `
-            --add-data "assets/Saber_for_Audit_logo.png;assets" --add-data "assets/fonts;assets/fonts" `
+            --add-data "assets/Saber_for_Audit_logo.png;assets" --add-data "assets/Fonts;assets/fonts" `
             --hidden-import arabic_reshaper --hidden-import bidi --hidden-import bidi.algorithm --collect-data arabic_reshaper `
             --hidden-import payroll_reports --hidden-import vat_return --hidden-import desktop_final --hidden-import desktop_brains --hidden-import ledger_reports --hidden-import desktop_dimensions --hidden-import desktop_stage3 --hidden-import pdf_import --hidden-import pypdf --hidden-import year_end --hidden-import lebanese_payroll --hidden-import inventory --hidden-import desktop_inventory --hidden-import desktop_v22 --hidden-import chart_extra --hidden-import invoice_calc --hidden-import tafqeet `
             --name SaberAccounting run_desktop.py
+
+      - name: Build background backup service
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --hidden-import inventory --hidden-import chart_extra --hidden-import lebanese_accounts --hidden-import lebanese_payroll `
+            --name SaberAccountingBackup backup_service.py
 
       - name: Make sure Inno Setup is available
         shell: pwsh

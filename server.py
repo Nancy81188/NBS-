@@ -5,6 +5,8 @@ import os
 import secrets
 import base64
 import json
+import sqlite3
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -62,8 +64,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             return None
 
     def _select_database(self):
-        try: self.db=self.company_manager.database(self.headers.get("X-Company-ID"),self.headers.get("X-Fiscal-Year"))
-        except Exception: self.db=self.master_db
+        try:
+            self.db=self.company_manager.database(self.headers.get("X-Company-ID"),self.headers.get("X-Fiscal-Year"))
+            return True
+        except (KeyError, ValueError) as exc:
+            self._json(400,{"error":str(exc).strip("'\"")})
+            return False
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -74,7 +80,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not user:
             return self._json(401, {"error": "Unauthorized"})
         if path == "/api/companies": return self._json(200,{"items":self.company_manager.list_companies(user["role"]=="admin")})
-        self._select_database()
+        if not self._select_database(): return
         if self._module_denied(user, path): return
         if path == "/api/me":
             info={k:user[k] for k in ("id","username","role","language","expires_at")}; info["permissions"]={m:self.master_db.user_can(user,m) for m in ("payroll","vat")}
@@ -268,7 +274,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             except Exception as exc: return self._json(400,{"error":str(exc)})
         if path == "/api/backups/folder": return self._json(200,{"folder":str(self.db._backups_dir())})
         if path == "/api/backups":
-            if user["role"]!="admin": return self._json(403,{"error":"Administrator permission required"})
             return self._json(200,{"items":self.db.list_backups()})
         if path == "/api/settings": return self._json(200,self.db.settings())
         if path == "/api/exchange-rates": return self._json(200,{"items":self.db.list_exchange_rates()})
@@ -339,7 +344,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             try: result=self.company_manager.create_year(body.get("company_id"),body.get("year"),user["id"])
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(201,{"company":result})
-        self._select_database()
+        if not self._select_database(): return
         fiscal_admin_paths=("/api/fiscal-years/reopen","/api/fiscal-years/refresh-opening","/api/fiscal-years/delete")
         if path not in fiscal_admin_paths and self.headers.get("X-Company-ID") and self.headers.get("X-Fiscal-Year") and self.company_manager.year_status(self.headers.get("X-Company-ID"),self.headers.get("X-Fiscal-Year"))=="closed":
             return self._json(423,{"error":"This fiscal year is closed and read-only"})
@@ -425,7 +430,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,{"user":result})
         if path == "/api/backups/create":
-            if user["role"]!="admin": return self._json(403,{"error":"Administrator permission required"})
             return self._json(200,{"path":self.db.backup()})
         if path == "/api/backups/restore":
             if user["role"]!="admin": return self._json(403,{"error":"Administrator permission required"})
@@ -581,7 +585,29 @@ class ApiHandler(BaseHTTPRequestHandler):
             items = body.get("items", [])
             if not isinstance(items, list) or len(items) > 5000:
                 return self._json(400, {"error": "Invalid import batch"})
-            replacement = self.db.clear_invoices(user["id"]) if body.get("replace_existing", False) else {"deleted": 0, "backup": None}
+            if body.get("replace_existing", False):
+                # Validate the entire replacement on a private SQLite snapshot first.
+                # A failed row leaves the live database untouched.
+                with self.db._lock, tempfile.TemporaryDirectory() as directory:
+                    stage_path=Path(directory)/"replacement.db"
+                    with sqlite3.connect(self.db.path) as source, sqlite3.connect(stage_path) as stage:
+                        source.backup(stage)
+                    stage_db=Database(stage_path)
+                    try: replacement=stage_db.clear_invoices(user["id"],make_backup=False)
+                    except Exception as exc: return self._json(400,{"error":str(exc)})
+                    ids,errors=[],[]
+                    for index,item in enumerate(items):
+                        try: ids.append(stage_db.import_invoice(item,user["id"]))
+                        except Exception as exc: errors.append({"index":index,"invoice_number":item.get("invoice_number") if isinstance(item,dict) else None,"error":str(exc)})
+                    if errors:
+                        return self._json(400,{"error":"Replacement cancelled; no existing data was changed","errors":errors})
+                    try:
+                        safety=self.db.backup("safety")
+                        with sqlite3.connect(stage_path) as source,sqlite3.connect(self.db.path) as target:
+                            source.backup(target)
+                    except Exception as exc: return self._json(500,{"error":f"Replacement could not be saved: {exc}"})
+                    return self._json(200,{"imported":len(ids),"ids":ids,"errors":[],"deleted":replacement["deleted"],"backup":safety})
+            replacement={"deleted":0,"backup":None}
             ids, errors = [], []
             for index, item in enumerate(items):
                 try:
@@ -602,7 +628,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             except KeyError: return self._json(404,{"error":"Company not found"})
             except Exception as exc: return self._json(400,{"error":str(exc)})
             return self._json(200,{"company":result})
-        self._select_database()
+        if not self._select_database(): return
         if self.headers.get("X-Company-ID") and self.headers.get("X-Fiscal-Year") and self.company_manager.year_status(self.headers.get("X-Company-ID"),self.headers.get("X-Fiscal-Year"))=="closed":
             return self._json(423,{"error":"This fiscal year is closed and read-only"})
         if user["role"] == "viewer":
@@ -647,7 +673,7 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         path=urlparse(self.path).path; user=self._user()
         if not user: return self._json(401,{"error":"Unauthorized"})
-        self._select_database()
+        if not self._select_database(): return
         if self.headers.get("X-Company-ID") and self.headers.get("X-Fiscal-Year") and self.company_manager.year_status(self.headers.get("X-Company-ID"),self.headers.get("X-Fiscal-Year"))=="closed":
             return self._json(423,{"error":"This fiscal year is closed and read-only"})
         if user["role"]=="viewer": return self._json(403,{"error":"Viewer access is read-only"})

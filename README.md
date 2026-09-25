@@ -230,6 +230,15 @@ F2 opens the list that fits the field: items in item fields, customers / supplie
 - NSSF statement: sickness & maternity shown as employee 3% + employer 8% = total 11% (as in the NSSF declaration).
 
 # Version 2.5.0 - Backups per company and per year
-- A backup is made only when you press "Create Backup Now" (and automatically before a restore or an import that replaces data, marked "safety"). Nothing is backed up when the program is opened.
+- Backups are made automatically each day while signed in to Windows. You can also press "Create Backup Now"; safety backups are made before restore and replacement imports.
 - Each company and each fiscal year has its own folder and file name: `SaberAccounting\backups\<Company>\<Year>\<Company>_<Year>_<date>_<time>.db`.
 - Security / Backup / Rates > Backup & Restore shows the backups of the company and year you are in, with "Save Backup As..." (copy to a USB key or a drive folder) and "Open Backup Folder". Backups made by older versions still appear and can be restored.
+
+# Data safety and automatic backups update
+
+- The first standalone launch asks you to set an admin password. Existing installations keep their current password.
+- Any signed-in user can create, view, and save a backup of the selected company/year from **My Backups**. Only administrators can restore a backup.
+- The Windows installer installs a background backup process in the shared Startup folder. It runs after Windows sign-in, checks once per hour, and creates one backup per company/year when 24 hours have passed. The desktop window does not need to be open. The computer must be on and a Windows user must be signed in. On the first new-company launch, a backup is made immediately. Backup files live in `SaberAccounting/backups/<Company>/<Year>` under that Windows user's profile; copy this folder to another drive if you need protection from drive failure.
+- Replacing imported invoices now validates the complete batch before changing the live file and keeps manual journal vouchers. If any row fails, the replacement is cancelled. A safety backup is made before a successful replacement.
+- Invalid company/year selections return an error. Payment and expense edits are prepared on a database snapshot before replacing the live file. Stock checks no longer temporarily remove saved movements.
+- The PDF import preview scans every page and creates separate preview rows when invoice numbers change. Repeated invoice numbers on following pages are grouped. Scanned pages stay visible for manual entry. Invoices sharing one page still require manual separation and review.

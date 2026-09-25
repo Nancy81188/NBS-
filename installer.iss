@@ -29,12 +29,14 @@ RestartApplications=no
 
 [Files]
 Source: "dist\SaberAccounting.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\SaberAccountingBackup.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "assets\Saber_for_Audit_logo.png"; DestDir: "{app}\assets"; Flags: ignoreversion
-Source: "assets\fonts\Amiri-OFL.txt"; DestDir: "{app}\assets\fonts"; Flags: ignoreversion
+Source: "assets\Fonts\Amiri-OFL.txt"; DestDir: "{app}\assets\fonts"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Saber Accounting"; Filename: "{app}\SaberAccounting.exe"
 Name: "{autodesktop}\Saber Accounting"; Filename: "{app}\SaberAccounting.exe"
+Name: "{commonstartup}\Saber Accounting Backups"; Filename: "{app}\SaberAccountingBackup.exe"; WorkingDir: "{app}"
 
 [Run]
 Filename: "{app}\SaberAccounting.exe"; Description: "Open Saber Accounting"; Flags: nowait postinstall skipifsilent
